@@ -487,6 +487,20 @@ void init_webserver() {
     }
   });
 
+  // Route for editing Sofar ID
+  server.on("/updateSofarID", HTTP_GET, [](AsyncWebServerRequest* request) {
+    if (WEBSERVER_AUTH_REQUIRED && !request->authenticate(http_username, http_password))
+      return request->requestAuthentication();
+    if (request->hasParam("value")) {
+      String value = request->getParam("value")->value();
+      datalayer.battery.settings.sofar_user_specified_battery_id = value.toInt();
+      store_settings();
+      request->send(200, "text/plain", "Updated successfully");
+    } else {
+      request->send(400, "text/plain", "Bad Request");
+    }
+  });
+
   // Route for editing Wh
   server.on("/updateBatterySize", HTTP_GET, [](AsyncWebServerRequest* request) {
     if (WEBSERVER_AUTH_REQUIRED && !request->authenticate(http_username, http_password))
@@ -1008,6 +1022,7 @@ String processor(const String& var) {
     }
     content += "</h4>";
     if (status == WL_CONNECTED) {
+      content += "<h4>Hostname: " + String(WiFi.getHostname()) + "</h4>";
       content += "<h4>IP: " + WiFi.localIP().toString() + "</h4>";
     } else {
       content += "<h4>Wifi state: " + getConnectResultString(status) + "</h4>";
@@ -1258,7 +1273,7 @@ String processor(const String& var) {
 
       if (contactor_control_enabled) {
         content += "<h4>Contactors controlled by emulator, state: ";
-        if (datalayer.system.status.contactors_battery2_engaged) {
+        if (datalayer.system.status.contactors_engaged) {
           content += "<span style='color: green;'>ON</span>";
         } else {
           content += "<span style='color: red;'>OFF</span>";

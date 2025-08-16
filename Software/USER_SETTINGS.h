@@ -27,6 +27,7 @@
 //#define KIA_HYUNDAI_HYBRID_BATTERY
 //#define MEB_BATTERY
 //#define MG_5_BATTERY
+//#define MG_HS_PHEV_BATTERY
 //#define NISSAN_LEAF_BATTERY
 //#define ORION_BMS
 //#define PYLON_BATTERY
@@ -67,6 +68,7 @@
 //#define SMA_TRIPOWER_CAN //Enable this line to emulate a "SMA Home Storage battery" over CAN bus
 //#define SOFAR_CAN        //Enable this line to emulate a "Sofar Energy Storage Inverter High Voltage BMS General Protocol (Extended Frame)" over CAN bus
 #define SOLAX_CAN        //Enable this line to emulate a "SolaX Triple Power LFP" over CAN bus
+//#define SOLXPOW_CAN      //Enable this line to emulate a "Solxpow compatible battery" over CAN bus
 //#define SUNGROW_CAN      //Enable this line to emulate a "Sungrow SBR064" over CAN bus
 
 /* Select hardware used for Battery-Emulator */
@@ -118,6 +120,8 @@
 /* Connectivity options */
 #define WIFI
 //#define WIFICONFIG  //Enable this line to set a static IP address / gateway /subnet mask for the device. see USER_SETTINGS.cpp for the settings
+//#define CUSTOM_HOSTNAME \
+  "battery-emulator"  //Enable this line to use a custom hostname for the device, if disabled the default naming format 'esp32-XXXXXX' will be used.
 #define WEBSERVER  //Enable this line to enable WiFi, and to run the webserver. See USER_SETTINGS.cpp for the Wifi settings.
 #define WIFIAP  //When enabled, the emulator will broadcast its own access point Wifi. Can be used at the same time as a normal Wifi connection to a router.
 #define MDNSRESPONDER  //Enable this line to enable MDNS, allows battery monitor te be found by .local address. Requires WEBSERVER to be enabled.

@@ -50,7 +50,7 @@
 volatile unsigned long long bmsResetTimeOffset = 0;
 
 // The current software version, shown on webserver
-const char* version_number = "8.15.dev";
+const char* version_number = "8.16.0";
 
 // Interval timers
 volatile unsigned long currentMillis = 0;
@@ -89,10 +89,6 @@ void setup() {
                           &logging_loop_task, WIFI_CORE);
 #endif
 
-  init_CAN();
-
-  init_contactors();
-
 #ifdef PRECHARGE_CONTROL
   init_precharge_control();
 #endif  // PRECHARGE_CONTROL
@@ -100,6 +96,12 @@ void setup() {
   setup_charger();
   setup_inverter();
   setup_battery();
+  setup_can_shunt();
+
+  // Init CAN only after any CAN receivers have had a chance to register.
+  init_CAN();
+
+  init_contactors();
 
   init_rs485();
 
@@ -107,7 +109,6 @@ void setup() {
   init_equipment_stop_button();
 #endif
 
-  setup_can_shunt();
   // BOOT button at runtime is used as an input for various things
   pinMode(0, INPUT_PULLUP);
 
@@ -139,6 +140,8 @@ void setup() {
     set_event(EVENT_PERIODIC_BMS_RESET_AT_INIT_SUCCESS, 0);
   }
 #endif
+
+  DEBUG_PRINTF("setup() complete\n");
 }
 
 // Loop empty, all functionality runs in tasks
@@ -207,6 +210,7 @@ static std::list<Transmitter*> transmitters;
 
 void register_transmitter(Transmitter* transmitter) {
   transmitters.push_back(transmitter);
+  DEBUG_PRINTF("transmitter registered, total: %d\n", transmitters.size());
 }
 
 void core_loop(void*) {
@@ -335,6 +339,15 @@ void init_serial() {
 #endif  // DEBUG_VIA_USB
 }
 
+void update_overflow(unsigned long currentMillis) {
+  // Check if millis overflowed
+  if (currentMillis < lastMillisOverflowCheck) {
+    // We have overflowed, increase rollover count
+    datalayer.system.status.millisrolloverCount++;
+  }
+  lastMillisOverflowCheck = currentMillis;
+}
+
 void check_interconnect_available() {
   if (datalayer.battery.status.voltage_dV == 0 || datalayer.battery2.status.voltage_dV == 0) {
     return;  // Both voltage values need to be available to start check
@@ -357,7 +370,14 @@ void check_interconnect_available() {
 
 void update_calculated_values() {
   /* Update CPU temperature*/
-  datalayer.system.info.CPU_temperature = temperatureRead();
+  union {
+    float temp;
+    uint32_t hex;
+  } temp = {.temp = temperatureRead()};
+  if (temp.hex != 0x42555555) {
+    // Ignoring erroneous temperature value that ESP32 sometimes returns
+    datalayer.system.info.CPU_temperature = temp.temp;
+  }
 
   /* Calculate allowed charge/discharge currents*/
   if (datalayer.battery.status.voltage_dV > 10) {
@@ -515,11 +535,8 @@ void update_calculated_values() {
       datalayer.battery.status.reported_remaining_capacity_Wh = datalayer.battery2.status.remaining_capacity_Wh;
     }
   }
-  // Check if millis has overflowed. Used in events to keep better track of time
-  if (currentMillis < lastMillisOverflowCheck) {  // Overflow detected
-    datalayer.system.status.millisrolloverCount++;
-  }
-  lastMillisOverflowCheck = currentMillis;
+
+  update_overflow(currentMillis);  // Update millis rollover count
 }
 
 void check_reset_reason() {
@@ -576,4 +593,10 @@ void check_reset_reason() {
     default:
       break;
   }
+}
+
+uint64_t get_timestamp(unsigned long currentMillis) {
+  update_overflow(currentMillis);
+  return (uint64_t)datalayer.system.status.millisrolloverCount * (uint64_t)std::numeric_limits<uint32_t>::max() +
+         (uint64_t)currentMillis;
 }
