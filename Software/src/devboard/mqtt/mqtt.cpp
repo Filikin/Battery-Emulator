@@ -638,7 +638,8 @@ void init_mqtt(void) {
   device_id = "battery-emulator";
 #endif
 
-  String clientId = String("BatteryEmulatorClient-") + WiFi.getHostname();
+//  String clientId = String("BatteryEmulatorClient-") + WiFi.getHostname();
+  String clientId = String(ssid.c_str()) + "-" + WiFi.getHostname();
 
   mqtt_cfg.broker.address.transport = MQTT_TRANSPORT_OVER_TCP;
   mqtt_cfg.broker.address.hostname = MQTT_SERVER;
