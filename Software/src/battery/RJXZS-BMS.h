@@ -22,15 +22,14 @@ class RjxzsBms : public CanBattery {
  private:
   /* Tweak these according to your battery build */
   static const int MAX_PACK_VOLTAGE_DV = 4600;  //5000 = 500.0V
-  static const int MIN_PACK_VOLTAGE_DV = 3000;
+  static const int MIN_PACK_VOLTAGE_DV = 2970;
   static const int MAX_CELL_VOLTAGE_MV = 4100;  //Battery is put into emergency stop if one cell goes over this value
   static const int MIN_CELL_VOLTAGE_MV = 3200;  //Battery is put into emergency stop if one cell goes below this value
   static const int MAX_CELL_DEVIATION_MV = 200;
   static const int MAX_DISCHARGE_POWER_ALLOWED_W = 10000; //changed to allow more powerful discharging ES
   static const int MAX_CHARGE_POWER_ALLOWED_W = 10000; //changed to allow more powerful charging ES
   static const int MAX_CHARGE_POWER_WHEN_TOPBALANCING_W = 500;  //Juozas increased form 500 to 10000
-  static const int RAMPDOWN_SOC =
-      9000;  // (90.00) SOC% to start ramping down from max charge power towards 0 at 100.00%
+  static const int RAMPDOWN_SOC = 9000;  // (90.00) SOC% to start ramping down from max charge power towards 0 at 100.00%
 
   unsigned long previousMillis10s = 0;  // will store last time a 10s CAN Message was sent
 
