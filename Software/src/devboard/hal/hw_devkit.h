@@ -50,7 +50,7 @@ The pin layout below supports the following:
 #define POSITIVE_CONTACTOR_PIN GPIO_NUM_5
 #define NEGATIVE_CONTACTOR_PIN GPIO_NUM_16
 #define PRECHARGE_PIN GPIO_NUM_17
-
+#define SECOND_BATTERY_CONTACTORS_PIN GPIO_NUM_32
 // SMA CAN contactor pins
 #define INVERTER_CONTACTOR_ENABLE_PIN GPIO_NUM_14
 
@@ -62,13 +62,13 @@ The pin layout below supports the following:
 // Equipment stop pin
 #define EQUIPMENT_STOP_PIN GPIO_NUM_12
 
+// Automatic precharging
+#define HIA4V1_PIN GPIO_NUM_17
+#define INVERTER_DISCONNECT_CONTACTOR_PIN GPIO_NUM_5
+
 // BMW_I3_BATTERY wake up pin
-#ifdef BMW_I3_BATTERY
 #define WUP_PIN1 GPIO_NUM_25  // Wake up pin for battery 1
-#ifdef DOUBLE_BATTERY
 #define WUP_PIN2 GPIO_NUM_32  // Wake up pin for battery 2
-#endif                        // DOUBLE_BATTERY
-#endif                        // BMW_I3_BATTERY
 
 /* ----- Error checks below, don't change (can't be moved to separate file) ----- */
 #ifndef HW_CONFIGURED

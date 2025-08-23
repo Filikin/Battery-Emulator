@@ -51,7 +51,12 @@
 #define POSITIVE_CONTACTOR_PIN 32
 #define NEGATIVE_CONTACTOR_PIN 33
 #define PRECHARGE_PIN 25
-#define BMS_POWER 18  // Note, this pin collides with CAN add-ons and Chademo
+#define BMS_POWER 18                      // Note, this pin collides with CAN add-ons and Chademo
+#define SECOND_BATTERY_CONTACTORS_PIN 15  //Note, this pin collides with SD card pins
+
+// Automatic precharging
+#define HIA4V1_PIN 25
+#define INVERTER_DISCONNECT_CONTACTOR_PIN 32
 
 // SMA CAN contactor pins
 #define INVERTER_CONTACTOR_ENABLE_PIN 5
@@ -70,12 +75,8 @@
 #define EQUIPMENT_STOP_PIN 35
 
 // BMW_I3_BATTERY wake up pin
-#ifdef BMW_I3_BATTERY
 #define WUP_PIN1 GPIO_NUM_25  // Wake up pin for battery 1
-#ifdef DOUBLE_BATTERY
 #define WUP_PIN2 GPIO_NUM_32  // Wake up pin for battery 2
-#endif                        // DOUBLE_BATTERY
-#endif                        // BMW_I3_BATTERY
 
 /* ----- Error checks below, don't change (can't be moved to separate file) ----- */
 #ifndef HW_CONFIGURED
@@ -87,6 +88,12 @@
 #if defined(CAN_ADDON) && defined(CANFD_ADDON)
 // Check that user did not try to use dual can and fd-can on same hardware pins
 #error CAN_ADDON AND CANFD_ADDON CANNOT BE USED SIMULTANEOUSLY
+#endif
+
+#if defined(SMA_BYD_H_CAN) || defined(SMA_BYD_HVS_CAN) || defined(SMA_TRIPOWER_CAN)
+#if defined(CAN_ADDON) || defined(CANFD_ADDON)
+#error Pin 5 used by both Enable line and for CAN-ADDON. Please reconfigure this, and remove this line to proceed
+#endif
 #endif
 
 #ifdef CHADEMO_BATTERY

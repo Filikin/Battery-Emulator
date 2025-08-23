@@ -1,449 +1,12 @@
-#include "../include.h"
-#ifdef TESLA_BATTERY
+#include "TESLA-BATTERY.h"
+#include "../communication/can/comm_can.h"
 #include "../datalayer/datalayer.h"
 #include "../datalayer/datalayer_extended.h"  //For Advanced Battery Insights webpage
 #include "../devboard/utils/events.h"
-#include "TESLA-BATTERY.h"
+#include "../include.h"
 
-/* Do not change code below unless you are sure what you are doing */
 /* Credits: Most of the code comes from Per Carlen's bms_comms_tesla_model3.py (https://gitlab.com/pelle8/batt2gen24/) */
 
-static unsigned long previousMillis10 = 0;   // will store last time a 50ms CAN Message was send
-static unsigned long previousMillis50 = 0;   // will store last time a 50ms CAN Message was send
-static unsigned long previousMillis100 = 0;  // will store last time a 100ms CAN Message was send
-static bool alternate243 = false;
-//0x221 545 VCFRONT_LVPowerState: "GenMsgCycleTime" 50ms
-CAN_frame TESLA_221_1 = {
-    .FD = false,
-    .ext_ID = false,
-    .DLC = 8,
-    .ID = 0x221,
-    .data = {0x41, 0x11, 0x01, 0x00, 0x00, 0x00, 0x20, 0x96}};  //Contactor frame 221 - close contactors
-CAN_frame TESLA_221_2 = {
-    .FD = false,
-    .ext_ID = false,
-    .DLC = 8,
-    .ID = 0x221,
-    .data = {0x61, 0x15, 0x01, 0x00, 0x00, 0x00, 0x20, 0xBA}};  //Contactor Frame 221 - hv_up_for_drive
-//0x241 VCFRONT_coolant 100ms
-CAN_frame TESLA_241 = {.FD = false,
-                       .ext_ID = false,
-                       .DLC = 7,
-                       .ID = 0x241,
-                       .data = {0x3C, 0x78, 0x2C, 0x0F, 0x1E, 0x5B, 0x00}};
-//0x242 VCLEFT_LVPowerState 100ms
-CAN_frame TESLA_242 = {.FD = false, .ext_ID = false, .DLC = 2, .ID = 0x242, .data = {0x10, 0x95}};
-//0x243 VCRIGHT_hvacStatus 50ms
-CAN_frame TESLA_243_1 = {.FD = false,
-                         .ext_ID = false,
-                         .DLC = 8,
-                         .ID = 0x243,
-                         .data = {0xC9, 0x00, 0xEB, 0xD4, 0x31, 0x32, 0x02, 0x00}};
-CAN_frame TESLA_243_2 = {.FD = false,
-                         .ext_ID = false,
-                         .DLC = 8,
-                         .ID = 0x243,
-                         .data = {0x08, 0x81, 0x42, 0x60, 0x92, 0x2C, 0x0E, 0x09}};
-//0x129 SteeringAngle 10ms
-CAN_frame TESLA_129 = {.FD = false,
-                       .ext_ID = false,
-                       .DLC = 8,
-                       .ID = 0x129,
-                       .data = {0x21, 0x24, 0x36, 0x5F, 0x00, 0x20, 0xFF, 0x3F}};
-CAN_frame TESLA_602 = {.FD = false,
-                       .ext_ID = false,
-                       .DLC = 8,
-                       .ID = 0x602,
-                       .data = {0x02, 0x27, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}};  //Diagnostic request
-static uint8_t stateMachineClearIsolationFault = 0xFF;
-static uint16_t sendContactorClosingMessagesStill = 300;
-static uint16_t battery_cell_max_v = 3300;
-static uint16_t battery_cell_min_v = 3300;
-static uint16_t battery_cell_deviation_mV = 0;  //contains the deviation between highest and lowest cell in mV
-static bool cellvoltagesRead = false;
-//0x3d2: 978 BMS_kwhCounter
-static uint32_t battery_total_discharge = 0;
-static uint32_t battery_total_charge = 0;
-//0x352: 850 BMS_energyStatus
-static bool BMS352_mux = false;                            // variable to store when 0x352 mux is present
-static uint16_t battery_energy_buffer = 0;                 // kWh
-static uint16_t battery_energy_buffer_m1 = 0;              // kWh
-static uint16_t battery_energy_to_charge_complete = 0;     // kWh
-static uint16_t battery_energy_to_charge_complete_m1 = 0;  // kWh
-static uint16_t battery_expected_energy_remaining = 0;     // kWh
-static uint16_t battery_expected_energy_remaining_m1 = 0;  // kWh
-static bool battery_full_charge_complete = false;          // Changed to bool
-static bool battery_fully_charged = false;                 // Changed to bool
-static uint16_t battery_ideal_energy_remaining = 0;        // kWh
-static uint16_t battery_ideal_energy_remaining_m0 = 0;     // kWh
-static uint16_t battery_nominal_energy_remaining = 0;      // kWh
-static uint16_t battery_nominal_energy_remaining_m0 = 0;   // kWh
-static uint16_t battery_nominal_full_pack_energy = 0;      // Kwh
-static uint16_t battery_nominal_full_pack_energy_m0 = 0;   // Kwh
-//0x132 306 HVBattAmpVolt
-static uint16_t battery_volts = 0;                  // V
-static int16_t battery_amps = 0;                    // A
-static int16_t battery_raw_amps = 0;                // A
-static uint16_t battery_charge_time_remaining = 0;  // Minutes
-//0x252 594 BMS_powerAvailable
-static uint16_t BMS_maxRegenPower = 0;           //rename from battery_regenerative_limit
-static uint16_t BMS_maxDischargePower = 0;       // rename from battery_discharge_limit
-static uint16_t BMS_maxStationaryHeatPower = 0;  //rename from battery_max_heat_park
-static uint16_t BMS_hvacPowerBudget = 0;         //rename from battery_hvac_max_power
-static uint8_t BMS_notEnoughPowerForHeatPump = 0;
-static uint8_t BMS_powerLimitState = 0;
-static uint8_t BMS_inverterTQF = 0;
-//0x2d2: 722 BMSVAlimits
-static uint16_t battery_max_discharge_current = 0;
-static uint16_t battery_max_charge_current = 0;
-static uint16_t battery_bms_max_voltage = 0;
-static uint16_t battery_bms_min_voltage = 0;
-//0x2b4: 692 PCS_dcdcRailStatus
-static uint16_t battery_dcdcHvBusVolt = 0;  // Change name from battery_high_voltage to battery_dcdcHvBusVolt
-static uint16_t battery_dcdcLvBusVolt = 0;  // Change name from battery_low_voltage to battery_dcdcLvBusVolt
-static uint16_t battery_dcdcLvOutputCurrent =
-    0;  // Change name from battery_output_current to battery_dcdcLvOutputCurrent
-//0x292: 658 BMS_socStatus
-static uint16_t battery_beginning_of_life = 0;  // kWh
-static uint16_t battery_soc_min = 0;
-static uint16_t battery_soc_max = 0;
-static uint16_t battery_soc_ui = 0;  //Change name from battery_soc_vi to reflect DBC battery_soc_ui
-static uint16_t battery_soc_ave = 0;
-static uint8_t battery_battTempPct = 0;
-//0x392: BMS_packConfig
-static uint32_t battery_packMass = 0;
-static uint32_t battery_platformMaxBusVoltage = 0;
-static uint32_t battery_packConfigMultiplexer = 0;
-static uint32_t battery_moduleType = 0;
-static uint32_t battery_reservedConfig = 0;
-//0x332: 818 BattBrickMinMax:BMS_bmbMinMax
-static int16_t battery_max_temp = 0;  // C*
-static int16_t battery_min_temp = 0;  // C*
-static uint16_t battery_BrickVoltageMax = 0;
-static uint16_t battery_BrickVoltageMin = 0;
-static uint8_t battery_BrickTempMaxNum = 0;
-static uint8_t battery_BrickTempMinNum = 0;
-static uint8_t battery_BrickModelTMax = 0;
-static uint8_t battery_BrickModelTMin = 0;
-static uint8_t battery_BrickVoltageMaxNum = 0;  //rename from battery_max_vno
-static uint8_t battery_BrickVoltageMinNum = 0;  //rename from battery_min_vno
-//0x20A: 522 HVP_contactorState
-static uint8_t battery_contactor = 0;  //State of contactor
-static uint8_t battery_hvil_status = 0;
-static uint8_t battery_packContNegativeState = 0;
-static uint8_t battery_packContPositiveState = 0;
-static uint8_t battery_packContactorSetState = 0;
-static bool battery_packCtrsClosingAllowed = false;    // Change to bool
-static bool battery_pyroTestInProgress = false;        // Change to bool
-static bool battery_packCtrsOpenNowRequested = false;  // Change to bool
-static bool battery_packCtrsOpenRequested = false;     // Change to bool
-static uint8_t battery_packCtrsRequestStatus = 0;
-static bool battery_packCtrsResetRequestRequired = false;  // Change to bool
-static bool battery_dcLinkAllowedToEnergize = false;       // Change to bool
-static bool battery_fcContNegativeAuxOpen = false;         // Change to bool
-static uint8_t battery_fcContNegativeState = 0;
-static bool battery_fcContPositiveAuxOpen = false;  // Change to bool
-static uint8_t battery_fcContPositiveState = 0;
-static uint8_t battery_fcContactorSetState = 0;
-static bool battery_fcCtrsClosingAllowed = false;    // Change to bool
-static bool battery_fcCtrsOpenNowRequested = false;  // Change to bool
-static bool battery_fcCtrsOpenRequested = false;     // Change to bool
-static uint8_t battery_fcCtrsRequestStatus = 0;
-static bool battery_fcCtrsResetRequestRequired = false;  // Change to bool
-static bool battery_fcLinkAllowedToEnergize = false;     // Change to bool
-//0x72A: BMS_serialNumber
-static uint8_t BMS_SerialNumber[14] = {0};  // Stores raw HEX values for ASCII chars
-//0x212: 530 BMS_status
-static bool battery_BMS_hvacPowerRequest = false;          //Change to bool
-static bool battery_BMS_notEnoughPowerForDrive = false;    //Change to bool
-static bool battery_BMS_notEnoughPowerForSupport = false;  //Change to bool
-static bool battery_BMS_preconditionAllowed = false;       //Change to bool
-static bool battery_BMS_updateAllowed = false;             //Change to bool
-static bool battery_BMS_activeHeatingWorthwhile = false;   //Change to bool
-static bool battery_BMS_cpMiaOnHvs = false;                //Change to bool
-static uint8_t battery_BMS_contactorState = 0;
-static uint8_t battery_BMS_state = 0;
-static uint8_t battery_BMS_hvState = 0;
-static uint16_t battery_BMS_isolationResistance = 0;
-static bool battery_BMS_chargeRequest = false;    //Change to bool
-static bool battery_BMS_keepWarmRequest = false;  //Change to bool
-static uint8_t battery_BMS_uiChargeStatus = 0;
-static bool battery_BMS_diLimpRequest = false;   //Change to bool
-static bool battery_BMS_okToShipByAir = false;   //Change to bool
-static bool battery_BMS_okToShipByLand = false;  //Change to bool
-static uint32_t battery_BMS_chgPowerAvailable = 0;
-static uint8_t battery_BMS_chargeRetryCount = 0;
-static bool battery_BMS_pcsPwmEnabled = false;        //Change to bool
-static bool battery_BMS_ecuLogUploadRequest = false;  //Change to bool
-static uint8_t battery_BMS_minPackTemperature = 0;
-// 0x224:548 PCS_dcdcStatus
-static uint8_t battery_PCS_dcdcPrechargeStatus = 0;
-static uint8_t battery_PCS_dcdc12VSupportStatus = 0;
-static uint8_t battery_PCS_dcdcHvBusDischargeStatus = 0;
-static uint16_t battery_PCS_dcdcMainState = 0;
-static uint8_t battery_PCS_dcdcSubState = 0;
-static bool battery_PCS_dcdcFaulted = false;          //Change to bool
-static bool battery_PCS_dcdcOutputIsLimited = false;  //Change to bool
-static uint32_t battery_PCS_dcdcMaxOutputCurrentAllowed = 0;
-static uint8_t battery_PCS_dcdcPrechargeRtyCnt = 0;
-static uint8_t battery_PCS_dcdc12VSupportRtyCnt = 0;
-static uint8_t battery_PCS_dcdcDischargeRtyCnt = 0;
-static uint8_t battery_PCS_dcdcPwmEnableLine = 0;
-static uint8_t battery_PCS_dcdcSupportingFixedLvTarget = 0;
-static uint8_t battery_PCS_ecuLogUploadRequest = 0;
-static uint8_t battery_PCS_dcdcPrechargeRestartCnt = 0;
-static uint8_t battery_PCS_dcdcInitialPrechargeSubState = 0;
-//0x312: 786 BMS_thermalStatus
-static uint16_t BMS_powerDissipation = 0;
-static uint16_t BMS_flowRequest = 0;
-static uint16_t BMS_inletActiveCoolTargetT = 0;
-static uint16_t BMS_inletPassiveTargetT = 0;
-static uint16_t BMS_inletActiveHeatTargetT = 0;
-static uint16_t BMS_packTMin = 0;
-static uint16_t BMS_packTMax = 0;
-static bool BMS_pcsNoFlowRequest = false;
-static bool BMS_noFlowRequest = false;
-//0x2A4; 676 PCS_thermalStatus
-static int16_t PCS_chgPhATemp = 0;
-static int16_t PCS_chgPhBTemp = 0;
-static int16_t PCS_chgPhCTemp = 0;
-static int16_t PCS_dcdcTemp = 0;
-static int16_t PCS_ambientTemp = 0;
-//0x2C4; 708 PCS_logging
-static uint16_t PCS_logMessageSelect = 0;
-static uint16_t PCS_dcdcMaxLvOutputCurrent = 0;
-static uint16_t PCS_dcdcCurrentLimit = 0;
-static uint16_t PCS_dcdcLvOutputCurrentTempLimit = 0;
-static uint16_t PCS_dcdcUnifiedCommand = 0;
-static uint16_t PCS_dcdcCLAControllerOutput = 0;
-static int16_t PCS_dcdcTankVoltage = 0;
-static uint16_t PCS_dcdcTankVoltageTarget = 0;
-static uint16_t PCS_dcdcClaCurrentFreq = 0;
-static int16_t PCS_dcdcTCommMeasured = 0;
-static uint16_t PCS_dcdcShortTimeUs = 0;
-static uint16_t PCS_dcdcHalfPeriodUs = 0;
-static uint16_t PCS_dcdcIntervalMaxFrequency = 0;
-static uint16_t PCS_dcdcIntervalMaxHvBusVolt = 0;
-static uint16_t PCS_dcdcIntervalMaxLvBusVolt = 0;
-static uint16_t PCS_dcdcIntervalMaxLvOutputCurr = 0;
-static uint16_t PCS_dcdcIntervalMinFrequency = 0;
-static uint16_t PCS_dcdcIntervalMinHvBusVolt = 0;
-static uint16_t PCS_dcdcIntervalMinLvBusVolt = 0;
-static uint16_t PCS_dcdcIntervalMinLvOutputCurr = 0;
-static uint32_t PCS_dcdc12vSupportLifetimekWh = 0;
-//0x7AA: //1962 HVP_debugMessage:
-static uint8_t HVP_debugMessageMultiplexer = 0;
-static bool HVP_gpioPassivePyroDepl = false;       //Change to bool
-static bool HVP_gpioPyroIsoEn = false;             //Change to bool
-static bool HVP_gpioCpFaultIn = false;             //Change to bool
-static bool HVP_gpioPackContPowerEn = false;       //Change to bool
-static bool HVP_gpioHvCablesOk = false;            //Change to bool
-static bool HVP_gpioHvpSelfEnable = false;         //Change to bool
-static bool HVP_gpioLed = false;                   //Change to bool
-static bool HVP_gpioCrashSignal = false;           //Change to bool
-static bool HVP_gpioShuntDataReady = false;        //Change to bool
-static bool HVP_gpioFcContPosAux = false;          //Change to bool
-static bool HVP_gpioFcContNegAux = false;          //Change to bool
-static bool HVP_gpioBmsEout = false;               //Change to bool
-static bool HVP_gpioCpFaultOut = false;            //Change to bool
-static bool HVP_gpioPyroPor = false;               //Change to bool
-static bool HVP_gpioShuntEn = false;               //Change to bool
-static bool HVP_gpioHvpVerEn = false;              //Change to bool
-static bool HVP_gpioPackCoontPosFlywheel = false;  //Change to bool
-static bool HVP_gpioCpLatchEnable = false;         //Change to bool
-static bool HVP_gpioPcsEnable = false;             //Change to bool
-static bool HVP_gpioPcsDcdcPwmEnable = false;      //Change to bool
-static bool HVP_gpioPcsChargePwmEnable = false;    //Change to bool
-static bool HVP_gpioFcContPowerEnable = false;     //Change to bool
-static bool HVP_gpioHvilEnable = false;            //Change to bool
-static bool HVP_gpioSecDrdy = false;               //Change to bool
-static uint16_t HVP_hvp1v5Ref = 0;
-static int16_t HVP_shuntCurrentDebug = 0;
-static bool HVP_packCurrentMia = false;           //Change to bool
-static bool HVP_auxCurrentMia = false;            //Change to bool
-static bool HVP_currentSenseMia = false;          //Change to bool
-static bool HVP_shuntRefVoltageMismatch = false;  //Change to bool
-static bool HVP_shuntThermistorMia = false;       //Change to bool
-static bool HVP_shuntHwMia = false;               //Change to bool
-static int16_t HVP_dcLinkVoltage = 0;
-static int16_t HVP_packVoltage = 0;
-static int16_t HVP_fcLinkVoltage = 0;
-static uint16_t HVP_packContVoltage = 0;
-static int16_t HVP_packNegativeV = 0;
-static int16_t HVP_packPositiveV = 0;
-static uint16_t HVP_pyroAnalog = 0;
-static int16_t HVP_dcLinkNegativeV = 0;
-static int16_t HVP_dcLinkPositiveV = 0;
-static int16_t HVP_fcLinkNegativeV = 0;
-static uint16_t HVP_fcContCoilCurrent = 0;
-static uint16_t HVP_fcContVoltage = 0;
-static uint16_t HVP_hvilInVoltage = 0;
-static uint16_t HVP_hvilOutVoltage = 0;
-static int16_t HVP_fcLinkPositiveV = 0;
-static uint16_t HVP_packContCoilCurrent = 0;
-static uint16_t HVP_battery12V = 0;
-static int16_t HVP_shuntRefVoltageDbg = 0;
-static int16_t HVP_shuntAuxCurrentDbg = 0;
-static int16_t HVP_shuntBarTempDbg = 0;
-static int16_t HVP_shuntAsicTempDbg = 0;
-static uint8_t HVP_shuntAuxCurrentStatus = 0;
-static uint8_t HVP_shuntBarTempStatus = 0;
-static uint8_t HVP_shuntAsicTempStatus = 0;
-//0x3aa: HVP_alertMatrix1 Fault codes   // Change to bool
-static bool battery_WatchdogReset = false;   //Warns if the processor has experienced a reset due to watchdog reset.
-static bool battery_PowerLossReset = false;  //Warns if the processor has experienced a reset due to power loss.
-static bool battery_SwAssertion = false;     //An internal software assertion has failed.
-static bool battery_CrashEvent = false;      //Warns if the crash signal is detected by HVP
-static bool battery_OverDchgCurrentFault = false;  //Warns if the pack discharge is above max discharge current limit
-static bool battery_OverChargeCurrentFault =
-    false;  //Warns if the pack discharge current is above max charge current limit
-static bool battery_OverCurrentFault =
-    false;  //Warns if the pack current (discharge or charge) is above max current limit.
-static bool battery_OverTemperatureFault = false;  //A pack module temperature is above maximum temperature limit
-static bool battery_OverVoltageFault = false;      //A brick voltage is above maximum voltage limit
-static bool battery_UnderVoltageFault = false;     //A brick voltage is below minimum voltage limit
-static bool battery_PrimaryBmbMiaFault =
-    false;  //Warns if the voltage and temperature readings from primary BMB chain are mia
-static bool battery_SecondaryBmbMiaFault =
-    false;  //Warns if the voltage and temperature readings from secondary BMB chain are mia
-static bool battery_BmbMismatchFault =
-    false;  //Warns if the primary and secondary BMB chain readings don't match with each other
-static bool battery_BmsHviMiaFault = false;   //Warns if the BMS node is mia on HVS or HVI CAN
-static bool battery_CpMiaFault = false;       //Warns if the CP node is mia on HVS CAN
-static bool battery_PcsMiaFault = false;      //The PCS node is mia on HVS CAN
-static bool battery_BmsFault = false;         //Warns if the BMS ECU has faulted
-static bool battery_PcsFault = false;         //Warns if the PCS ECU has faulted
-static bool battery_CpFault = false;          //Warns if the CP ECU has faulted
-static bool battery_ShuntHwMiaFault = false;  //Warns if the shunt current reading is not available
-static bool battery_PyroMiaFault = false;     //Warns if the pyro squib is not connected
-static bool battery_hvsMiaFault = false;      //Warns if the pack contactor hw fault
-static bool battery_hviMiaFault = false;      //Warns if the FC contactor hw fault
-static bool battery_Supply12vFault = false;  //Warns if the low voltage (12V) battery is below minimum voltage threshold
-static bool battery_VerSupplyFault =
-    false;                              //Warns if the Energy reserve voltage supply is below minimum voltage threshold
-static bool battery_HvilFault = false;  //Warn if a High Voltage Inter Lock fault is detected
-static bool battery_BmsHvsMiaFault = false;  //Warns if the BMS node is mia on HVS or HVI CAN
-static bool battery_PackVoltMismatchFault =
-    false;  //Warns if the pack voltage doesn't match approximately with sum of brick voltages
-static bool battery_EnsMiaFault = false;         //Warns if the ENS line is not connected to HVC
-static bool battery_PackPosCtrArcFault = false;  //Warns if the HVP detectes series arc at pack contactor
-static bool battery_packNegCtrArcFault = false;  //Warns if the HVP detectes series arc at FC contactor
-static bool battery_ShuntHwAndBmsMiaFault = false;
-static bool battery_fcContHwFault = false;
-static bool battery_robinOverVoltageFault = false;
-static bool battery_packContHwFault = false;
-static bool battery_pyroFuseBlown = false;
-static bool battery_pyroFuseFailedToBlow = false;
-static bool battery_CpilFault = false;
-static bool battery_PackContactorFellOpen = false;
-static bool battery_FcContactorFellOpen = false;
-static bool battery_packCtrCloseBlocked = false;
-static bool battery_fcCtrCloseBlocked = false;
-static bool battery_packContactorForceOpen = false;
-static bool battery_fcContactorForceOpen = false;
-static bool battery_dcLinkOverVoltage = false;
-static bool battery_shuntOverTemperature = false;
-static bool battery_passivePyroDeploy = false;
-static bool battery_logUploadRequest = false;
-static bool battery_packCtrCloseFailed = false;
-static bool battery_fcCtrCloseFailed = false;
-static bool battery_shuntThermistorMia = false;
-//0x320: 800 BMS_alertMatrix
-static uint8_t battery_BMS_matrixIndex = 0;  // Changed to bool
-static bool battery_BMS_a061_robinBrickOverVoltage = false;
-static bool battery_BMS_a062_SW_BrickV_Imbalance = false;
-static bool battery_BMS_a063_SW_ChargePort_Fault = false;
-static bool battery_BMS_a064_SW_SOC_Imbalance = false;
-static bool battery_BMS_a127_SW_shunt_SNA = false;
-static bool battery_BMS_a128_SW_shunt_MIA = false;
-static bool battery_BMS_a069_SW_Low_Power = false;
-static bool battery_BMS_a130_IO_CAN_Error = false;
-static bool battery_BMS_a071_SW_SM_TransCon_Not_Met = false;
-static bool battery_BMS_a132_HW_BMB_OTP_Uncorrctbl = false;
-static bool battery_BMS_a134_SW_Delayed_Ctr_Off = false;
-static bool battery_BMS_a075_SW_Chg_Disable_Failure = false;
-static bool battery_BMS_a076_SW_Dch_While_Charging = false;
-static bool battery_BMS_a017_SW_Brick_OV = false;
-static bool battery_BMS_a018_SW_Brick_UV = false;
-static bool battery_BMS_a019_SW_Module_OT = false;
-static bool battery_BMS_a021_SW_Dr_Limits_Regulation = false;
-static bool battery_BMS_a022_SW_Over_Current = false;
-static bool battery_BMS_a023_SW_Stack_OV = false;
-static bool battery_BMS_a024_SW_Islanded_Brick = false;
-static bool battery_BMS_a025_SW_PwrBalance_Anomaly = false;
-static bool battery_BMS_a026_SW_HFCurrent_Anomaly = false;
-static bool battery_BMS_a087_SW_Feim_Test_Blocked = false;
-static bool battery_BMS_a088_SW_VcFront_MIA_InDrive = false;
-static bool battery_BMS_a089_SW_VcFront_MIA = false;
-static bool battery_BMS_a090_SW_Gateway_MIA = false;
-static bool battery_BMS_a091_SW_ChargePort_MIA = false;
-static bool battery_BMS_a092_SW_ChargePort_Mia_On_Hv = false;
-static bool battery_BMS_a034_SW_Passive_Isolation = false;
-static bool battery_BMS_a035_SW_Isolation = false;
-static bool battery_BMS_a036_SW_HvpHvilFault = false;
-static bool battery_BMS_a037_SW_Flood_Port_Open = false;
-static bool battery_BMS_a158_SW_HVP_HVI_Comms = false;
-static bool battery_BMS_a039_SW_DC_Link_Over_Voltage = false;
-static bool battery_BMS_a041_SW_Power_On_Reset = false;
-static bool battery_BMS_a042_SW_MPU_Error = false;
-static bool battery_BMS_a043_SW_Watch_Dog_Reset = false;
-static bool battery_BMS_a044_SW_Assertion = false;
-static bool battery_BMS_a045_SW_Exception = false;
-static bool battery_BMS_a046_SW_Task_Stack_Usage = false;
-static bool battery_BMS_a047_SW_Task_Stack_Overflow = false;
-static bool battery_BMS_a048_SW_Log_Upload_Request = false;
-static bool battery_BMS_a169_SW_FC_Pack_Weld = false;
-static bool battery_BMS_a050_SW_Brick_Voltage_MIA = false;
-static bool battery_BMS_a051_SW_HVC_Vref_Bad = false;
-static bool battery_BMS_a052_SW_PCS_MIA = false;
-static bool battery_BMS_a053_SW_ThermalModel_Sanity = false;
-static bool battery_BMS_a054_SW_Ver_Supply_Fault = false;
-static bool battery_BMS_a176_SW_GracefulPowerOff = false;
-static bool battery_BMS_a059_SW_Pack_Voltage_Sensing = false;
-static bool battery_BMS_a060_SW_Leakage_Test_Failure = false;
-static bool battery_BMS_a077_SW_Charger_Regulation = false;
-static bool battery_BMS_a081_SW_Ctr_Close_Blocked = false;
-static bool battery_BMS_a082_SW_Ctr_Force_Open = false;
-static bool battery_BMS_a083_SW_Ctr_Close_Failure = false;
-static bool battery_BMS_a084_SW_Sleep_Wake_Aborted = false;
-static bool battery_BMS_a094_SW_Drive_Inverter_MIA = false;
-static bool battery_BMS_a099_SW_BMB_Communication = false;
-static bool battery_BMS_a105_SW_One_Module_Tsense = false;
-static bool battery_BMS_a106_SW_All_Module_Tsense = false;
-static bool battery_BMS_a107_SW_Stack_Voltage_MIA = false;
-static bool battery_BMS_a121_SW_NVRAM_Config_Error = false;
-static bool battery_BMS_a122_SW_BMS_Therm_Irrational = false;
-static bool battery_BMS_a123_SW_Internal_Isolation = false;
-static bool battery_BMS_a129_SW_VSH_Failure = false;
-static bool battery_BMS_a131_Bleed_FET_Failure = false;
-static bool battery_BMS_a136_SW_Module_OT_Warning = false;
-static bool battery_BMS_a137_SW_Brick_UV_Warning = false;
-static bool battery_BMS_a138_SW_Brick_OV_Warning = false;
-static bool battery_BMS_a139_SW_DC_Link_V_Irrational = false;
-static bool battery_BMS_a141_SW_BMB_Status_Warning = false;
-static bool battery_BMS_a144_Hvp_Config_Mismatch = false;
-static bool battery_BMS_a145_SW_SOC_Change = false;
-static bool battery_BMS_a146_SW_Brick_Overdischarged = false;
-static bool battery_BMS_a149_SW_Missing_Config_Block = false;
-static bool battery_BMS_a151_SW_external_isolation = false;
-static bool battery_BMS_a156_SW_BMB_Vref_bad = false;
-static bool battery_BMS_a157_SW_HVP_HVS_Comms = false;
-static bool battery_BMS_a159_SW_HVP_ECU_Error = false;
-static bool battery_BMS_a161_SW_DI_Open_Request = false;
-static bool battery_BMS_a162_SW_No_Power_For_Support = false;
-static bool battery_BMS_a163_SW_Contactor_Mismatch = false;
-static bool battery_BMS_a164_SW_Uncontrolled_Regen = false;
-static bool battery_BMS_a165_SW_Pack_Partial_Weld = false;
-static bool battery_BMS_a166_SW_Pack_Full_Weld = false;
-static bool battery_BMS_a167_SW_FC_Partial_Weld = false;
-static bool battery_BMS_a168_SW_FC_Full_Weld = false;
-static bool battery_BMS_a170_SW_Limp_Mode = false;
-static bool battery_BMS_a171_SW_Stack_Voltage_Sense = false;
-static bool battery_BMS_a174_SW_Charge_Failure = false;
-static bool battery_BMS_a179_SW_Hvp_12V_Fault = false;
-static bool battery_BMS_a180_SW_ECU_reset_blocked = false;
-
-// Function definitions
 inline const char* getContactorText(int index) {
   switch (index) {
     case 0:
@@ -763,14 +326,15 @@ inline const char* getFault(bool value) {
   return value ? "ACTIVE" : "NOT_ACTIVE";
 }
 
-void update_values_battery() {  //This function maps all the values fetched via CAN to the correct parameters used for modbus
+void TeslaBattery::
+    update_values() {  //This function maps all the values fetched via CAN to the correct parameters used for modbus
   //After values are mapped, we perform some safety checks, and do some serial printouts
 
   datalayer.battery.status.soh_pptt = 9900;  //Tesla batteries do not send a SOH% value on bus. Hardcode to 99%
 
   datalayer.battery.status.real_soc = (battery_soc_ui * 10);  //increase SOC range from 0-100.0 -> 100.00
 
-  datalayer.battery.status.voltage_dV = (battery_volts * 10);  //One more decimal needed (370 -> 3700)
+  datalayer.battery.status.voltage_dV = battery_volts;
 
   datalayer.battery.status.current_dA = battery_amps;  //13.0A
 
@@ -779,7 +343,7 @@ void update_values_battery() {  //This function maps all the values fetched via 
       (static_cast<double>(datalayer.battery.status.real_soc) / 10000) * datalayer.battery.info.total_capacity_Wh);
 
   // Define the allowed discharge power
-  datalayer.battery.status.max_discharge_power_W = (battery_max_discharge_current * battery_volts);
+  datalayer.battery.status.max_discharge_power_W = (battery_max_discharge_current * (battery_volts / 10));
   // Cap the allowed discharge power if higher than the maximum discharge power allowed
   if (datalayer.battery.status.max_discharge_power_W > MAXDISCHARGEPOWERALLOWED) {
     datalayer.battery.status.max_discharge_power_W = MAXDISCHARGEPOWERALLOWED;
@@ -824,8 +388,8 @@ void update_values_battery() {  //This function maps all the values fetched via 
   } else {
     clear_event(EVENT_INTERNAL_OPEN_FAULT);
   }
-  //Voltage missing, pyrofuse most likely blown
-  if (datalayer.battery.status.voltage_dV == 10) {
+  //Voltage between 0.5-5.0V, pyrofuse most likely blown
+  if (datalayer.battery.status.voltage_dV >= 5 && datalayer.battery.status.voltage_dV <= 50) {
     set_event(EVENT_BATTERY_FUSE, 0);
   } else {
     clear_event(EVENT_BATTERY_FUSE);
@@ -866,9 +430,18 @@ void update_values_battery() {  //This function maps all the values fetched via 
 #endif  // TESLA_MODEL_3Y_BATTERY
 
   // Check if user requests some action
-  if (datalayer.battery.settings.user_requests_isolation_clear) {
-    stateMachineClearIsolationFault = 0;  //Start the statemachine
-    datalayer.battery.settings.user_requests_isolation_clear = false;
+  if (datalayer.battery.settings.user_requests_tesla_isolation_clear) {
+    stateMachineClearIsolationFault = 0;  //Start the isolation fault statemachine
+    datalayer.battery.settings.user_requests_tesla_isolation_clear = false;
+  }
+  if (datalayer.battery.settings.user_requests_tesla_bms_reset) {
+    if (battery_contactor == 1 && battery_BMS_a180_SW_ECU_reset_blocked == false) {
+      //Start the BMS ECU reset statemachine, only if contactors are OPEN and BMS ECU allows it
+      stateMachineBMSReset = 0;
+      datalayer.battery.settings.user_requests_tesla_bms_reset = false;
+    } else {
+      logging.println("ERROR: BMS reset failed due to contactors not being open, or BMS ECU not allowing it");
+    }
   }
 
   // Update webserver datalayer
@@ -907,8 +480,8 @@ void update_values_battery() {  //This function maps all the values fetched via 
   datalayer_extended.tesla.battery_full_charge_complete = battery_full_charge_complete;
   datalayer_extended.tesla.battery_fully_charged = battery_fully_charged;
   //0x3D2
-  datalayer_extended.tesla.battery_total_discharge = battery_total_discharge;
-  datalayer_extended.tesla.battery_total_charge = battery_total_charge;
+  datalayer.battery.status.total_discharged_battery_Wh = battery_total_discharge;
+  datalayer.battery.status.total_charged_battery_Wh = battery_total_charge;
   //0x392
   datalayer_extended.tesla.battery_moduleType = battery_moduleType;
   datalayer_extended.tesla.battery_packMass = battery_packMass;
@@ -1081,8 +654,12 @@ void update_values_battery() {  //This function maps all the values fetched via 
   logging.print("Battery values: ");
   logging.print("Real SOC: ");
   logging.print(battery_soc_ui / 10.0, 1);
-  print_int_with_units(", Battery voltage: ", battery_volts, "V");
-  print_int_with_units(", Battery HV current: ", (battery_amps * 0.1), "A");
+  logging.print(", Battery voltage: ");
+  logging.print(battery_volts / 10.0, 1);
+  logging.print("V");
+  logging.print(", Battery HV current: ");
+  logging.print(battery_amps / 10.0, 1);
+  logging.print("A");
   logging.print(", Fully charged?: ");
   if (battery_full_charge_complete)
     logging.print("YES, ");
@@ -1111,21 +688,10 @@ void update_values_battery() {  //This function maps all the values fetched via 
   logging.printf("PCS_ambientTemp: %.2f°C, DCDC_Temp: %.2f°C, ChgPhA: %.2f°C, ChgPhB: %.2f°C, ChgPhC: %.2f°C.\n",
                  PCS_ambientTemp * 0.1 + 40, PCS_dcdcTemp * 0.1 + 40, PCS_chgPhATemp * 0.1 + 40,
                  PCS_chgPhBTemp * 0.1 + 40, PCS_chgPhCTemp * 0.1 + 40);
-
-  logging.println("Values passed to the inverter: ");
-  print_SOC(" SOC: ", datalayer.battery.status.reported_soc);
-  print_int_with_units(" Max discharge power: ", datalayer.battery.status.max_discharge_power_W, "W");
-  logging.print(", ");
-  print_int_with_units(" Max charge power: ", datalayer.battery.status.max_charge_power_W, "W");
-  logging.println("");
-  print_int_with_units(" Max temperature: ", ((int16_t)datalayer.battery.status.temperature_min_dC * 0.1), "°C");
-  logging.print(", ");
-  print_int_with_units(" Min temperature: ", ((int16_t)datalayer.battery.status.temperature_max_dC * 0.1), "°C");
-  logging.println("");
 #endif  //DEBUG_LOG
 }
 
-void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
+void TeslaBattery::handle_incoming_can_frame(CAN_frame rx_frame) {
   static uint8_t mux = 0;
   static uint16_t temp = 0;
   static bool mux0_read = false;
@@ -1294,7 +860,7 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
       break;
     case 0x132:  //battery amps/volts //HVBattAmpVolt
       battery_volts = ((rx_frame.data.u8[1] << 8) | rx_frame.data.u8[0]) *
-                      0.01;  //0|16@1+ (0.01,0) [0|655.35] "V"  //Example 37030mv * 0.01 = 370V
+                      0.1;  //0|16@1+ (0.01,0) [0|655.35] "V"  //Example 37030mv * 0.01 = 3703dV
       battery_amps =
           ((rx_frame.data.u8[3] << 8) |
            rx_frame.data.u8
@@ -1311,11 +877,11 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
       break;
     case 0x3D2:  //TotalChargeDischarge:
       battery_total_discharge = ((rx_frame.data.u8[3] << 24) | (rx_frame.data.u8[2] << 16) |
-                                 (rx_frame.data.u8[1] << 8) | rx_frame.data.u8[0]) *
-                                0.001;  //0|32@1+ (0.001,0) [0|4294970] "kWh"
+                                 (rx_frame.data.u8[1] << 8) | rx_frame.data.u8[0]);
+      //0|32@1+ (0.001,0) [0|4294970] "kWh"
       battery_total_charge = ((rx_frame.data.u8[7] << 24) | (rx_frame.data.u8[6] << 16) | (rx_frame.data.u8[5] << 8) |
-                              rx_frame.data.u8[4]) *
-                             0.001;  //32|32@1+ (0.001,0) [0|4294970] "kWh"
+                              rx_frame.data.u8[4]);
+      //32|32@1+ (0.001,0) [0|4294970] "kWh"
       break;
     case 0x332:                            //min/max hist values //BattBrickMinMax:
       mux = (rx_frame.data.u8[0] & 0x03);  //BattBrickMultiplexer M : 0|2@1+ (1,0) [0|0] ""
@@ -1633,7 +1199,7 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
       battery_OverDchgCurrentFault = ((rx_frame.data.u8[0] & 0x10) >> 4);
       battery_OverChargeCurrentFault = ((rx_frame.data.u8[0] & 0x20) >> 5);
       battery_OverCurrentFault = ((rx_frame.data.u8[0] & 0x40) >> 6);
-      battery_OverTemperatureFault = ((rx_frame.data.u8[1] & 0x80) >> 7);
+      battery_OverTemperatureFault = ((rx_frame.data.u8[0] & 0x80) >> 7);
       battery_OverVoltageFault = (rx_frame.data.u8[1] & 0x01);
       battery_UnderVoltageFault = ((rx_frame.data.u8[1] & 0x02) >> 1);
       battery_PrimaryBmbMiaFault = ((rx_frame.data.u8[1] & 0x04) >> 2);
@@ -1801,12 +1367,20 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
         BMS_SerialNumber[13] = rx_frame.data.u8[7];
       }
       break;
+    case 0x612:  // CAN UDS responses for BMS ECU reset
+      if (memcmp(rx_frame.data.u8, "\x02\x67\x06\xAA\xAA\xAA\xAA\xAA", 8) == 0) {
+        logging.println("CAN UDS response: ECU unlocked");
+      } else if (memcmp(rx_frame.data.u8, "\x03\x7F\x11\x78\xAA\xAA\xAA\xAA", 8) == 0) {
+        logging.println("CAN UDS response: ECU reset request successful but ECU busy, response pending");
+      } else if (memcmp(rx_frame.data.u8, "\x02\x51\x01\xAA\xAA\xAA\xAA\xAA", 8) == 0) {
+        logging.println("CAN UDS response: ECU reset positive response, 1 second downtime");
+      }
+      break;
     default:
       break;
   }
 }
 
-#if defined(TESLA_MODEL_SX_BATTERY) || defined(EXP_TESLA_BMS_DIGITAL_HVIL)
 CAN_frame can_msg_1CF[] = {
     {.FD = false, .ext_ID = false, .DLC = 8, .ID = 0x1CF, .data = {0x01, 0x00, 0x00, 0x1A, 0x1C, 0x02, 0x60, 0x69}},
     {.FD = false, .ext_ID = false, .DLC = 8, .ID = 0x1CF, .data = {0x01, 0x00, 0x00, 0x1A, 0x1C, 0x02, 0x80, 0x89}},
@@ -1840,40 +1414,37 @@ unsigned long lastSend118 = 0;
 
 int index_1CF = 0;
 int index_118 = 0;
-#endif  //defined(TESLA_MODEL_SX_BATTERY) || defined(EXP_TESLA_BMS_DIGITAL_HVIL)
 
-void transmit_can_battery() {
+void TeslaBattery::transmit_can(unsigned long currentMillis) {
   /*From bielec: My fist 221 message, to close the contactors is 0x41, 0x11, 0x01, 0x00, 0x00, 0x00, 0x20, 0x96 and then, 
 to cause "hv_up_for_drive" I send an additional 221 message 0x61, 0x15, 0x01, 0x00, 0x00, 0x00, 0x20, 0xBA  so 
 two 221 messages are being continuously transmitted.   When I want to shut down, I stop the second message and only send 
 the first, for a few cycles, then stop all  messages which causes the contactor to open. */
 
-  unsigned long currentMillis = millis();
-
   if (!cellvoltagesRead) {
     return;  //All cellvoltages not read yet, do not proceed with contactor closing
   }
 
-#if defined(TESLA_MODEL_SX_BATTERY) || defined(EXP_TESLA_BMS_DIGITAL_HVIL)
-  if ((datalayer.system.status.inverter_allows_contactor_closing) && (datalayer.battery.status.bms_status != FAULT)) {
-    if (currentMillis - lastSend1CF >= 10) {
-      transmit_can_frame(&can_msg_1CF[index_1CF], can_config.battery);
+  if (operate_contactors) {
+    if ((datalayer.system.status.inverter_allows_contactor_closing) && (datalayer.battery.status.bms_status != FAULT)) {
+      if (currentMillis - lastSend1CF >= 10) {
+        transmit_can_frame(&can_msg_1CF[index_1CF], can_config.battery);
 
-      index_1CF = (index_1CF + 1) % 8;
-      lastSend1CF = currentMillis;
+        index_1CF = (index_1CF + 1) % 8;
+        lastSend1CF = currentMillis;
+      }
+
+      if (currentMillis - lastSend118 >= 10) {
+        transmit_can_frame(&can_msg_118[index_118], can_config.battery);
+
+        index_118 = (index_118 + 1) % 16;
+        lastSend118 = currentMillis;
+      }
+    } else {
+      index_1CF = 0;
+      index_118 = 0;
     }
-
-    if (currentMillis - lastSend118 >= 10) {
-      transmit_can_frame(&can_msg_118[index_118], can_config.battery);
-
-      index_118 = (index_118 + 1) % 16;
-      lastSend118 = currentMillis;
-    }
-  } else {
-    index_1CF = 0;
-    index_118 = 0;
   }
-#endif  //defined(TESLA_MODEL_SX_BATTERY) || defined(EXP_TESLA_BMS_DIGITAL_HVIL)
 
   //Send 10ms message
   if (currentMillis - previousMillis10 >= INTERVAL_10_MS) {
@@ -1884,12 +1455,6 @@ the first, for a few cycles, then stop all  messages which causes the contactor 
 
   //Send 50ms message
   if (currentMillis - previousMillis50 >= INTERVAL_50_MS) {
-    // Check if sending of CAN messages has been delayed too much.
-    if ((currentMillis - previousMillis50 >= INTERVAL_50_MS_DELAYED) && (currentMillis > BOOTUP_TIME)) {
-      set_event(EVENT_CAN_OVERRUN, (currentMillis - previousMillis50));
-    } else {
-      clear_event(EVENT_CAN_OVERRUN);
-    }
     previousMillis50 = currentMillis;
 
     if ((datalayer.system.status.inverter_allows_contactor_closing == true) &&
@@ -1949,6 +1514,7 @@ the first, for a few cycles, then stop all  messages which causes the contactor 
         case 4:
           TESLA_602.data = {0x22, 0x3E, 0x39, 0x38, 0x3B, 0x3A, 0x00, 0x00};
           transmit_can_frame(&TESLA_602, can_config.battery);
+          //Should generate a CAN UDS log message indicating ECU unlocked
           stateMachineClearIsolationFault = 5;
           break;
         case 5:
@@ -1961,28 +1527,69 @@ the first, for a few cycles, then stop all  messages which causes the contactor 
           stateMachineClearIsolationFault = 0xFF;
           break;
       }
+      if (stateMachineBMSReset != 0xFF) {
+        //This implementation should be rewritten to actually replying to the UDS replied sent by the BMS
+        //While this may work, it is not the correct way to implement this clearing logic
+        switch (stateMachineBMSReset) {
+          case 0:
+            TESLA_602.data = {0x02, 0x27, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00};
+            transmit_can_frame(&TESLA_602, can_config.battery);
+            stateMachineBMSReset = 1;
+            break;
+          case 1:
+            TESLA_602.data = {0x30, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00};
+            transmit_can_frame(&TESLA_602, can_config.battery);
+            stateMachineBMSReset = 2;
+            break;
+          case 2:
+            TESLA_602.data = {0x10, 0x12, 0x27, 0x06, 0x35, 0x34, 0x37, 0x36};
+            transmit_can_frame(&TESLA_602, can_config.battery);
+            stateMachineBMSReset = 3;
+            break;
+          case 3:
+            TESLA_602.data = {0x21, 0x31, 0x30, 0x33, 0x32, 0x3D, 0x3C, 0x3F};
+            transmit_can_frame(&TESLA_602, can_config.battery);
+            stateMachineBMSReset = 4;
+            break;
+          case 4:
+            TESLA_602.data = {0x22, 0x3E, 0x39, 0x38, 0x3B, 0x3A, 0x00, 0x00};
+            transmit_can_frame(&TESLA_602, can_config.battery);
+            //Should generate a CAN UDS log message indicating ECU unlocked
+            stateMachineBMSReset = 5;
+            break;
+          case 5:
+            TESLA_602.data = {0x02, 0x10, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00};
+            transmit_can_frame(&TESLA_602, can_config.battery);
+            stateMachineBMSReset = 6;
+            break;
+          case 6:
+            TESLA_602.data = {0x02, 0x10, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+            transmit_can_frame(&TESLA_602, can_config.battery);
+            stateMachineBMSReset = 7;
+            break;
+          case 7:
+            TESLA_602.data = {0x02, 0x11, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+            transmit_can_frame(&TESLA_602, can_config.battery);
+            //Should generate a CAN UDS log message(s) indicating ECU has reset
+            stateMachineBMSReset = 0xFF;
+            break;
+          default:
+            //Something went wrong. Reset all and cancel
+            stateMachineBMSReset = 0xFF;
+            break;
+        }
+      }
     }
   }
 }
 
-void print_int_with_units(char* header, int value, char* units) {
-  logging.print(header);
-  logging.print(value);
-  logging.print(units);
+void printDebugIfActive(uint8_t symbol, const char* message) {
+  if (symbol == 1) {
+    logging.println(message);
+  }
 }
 
-void print_SOC(char* header, int SOC) {
-  logging.print(header);
-  logging.print(SOC / 100);
-  logging.print(".");
-  int hundredth = SOC % 100;
-  if (hundredth < 10)
-    logging.print(0);
-  logging.print(hundredth);
-  logging.println("%");
-}
-
-void printFaultCodesIfActive() {
+void TeslaBattery::printFaultCodesIfActive() {
   if (battery_packCtrsClosingAllowed == 0) {
     logging.println(
         "ERROR: Check high voltage connectors and interlock circuit! Closing contactor not allowed! Values: ");
@@ -2150,27 +1757,13 @@ void printFaultCodesIfActive() {
   printDebugIfActive(battery_BMS_a180_SW_ECU_reset_blocked, "ERROR: BMS_a180_SW_ECU_reset_blocked");
 }
 
-void printDebugIfActive(uint8_t symbol, const char* message) {
-  if (symbol == 1) {
-    logging.println(message);
+void TeslaModel3YBattery::setup(void) {  // Performs one time setup at startup
+
+  if (allows_contactor_closing) {
+    *allows_contactor_closing = true;
   }
-}
 
-void setup_battery(void) {  // Performs one time setup at startup
-  datalayer.system.status.battery_allows_contactor_closing = true;
-
-#ifdef TESLA_MODEL_SX_BATTERY  // Always use NCM/A mode on S/X packs
-  strncpy(datalayer.system.info.battery_protocol, "Tesla Model S/X", 63);
-  datalayer.system.info.battery_protocol[63] = '\0';
-  datalayer.battery.info.max_design_voltage_dV = MAX_PACK_VOLTAGE_SX_NCMA;
-  datalayer.battery.info.min_design_voltage_dV = MIN_PACK_VOLTAGE_SX_NCMA;
-  datalayer.battery.info.max_cell_voltage_mV = MAX_CELL_VOLTAGE_NCA_NCM;
-  datalayer.battery.info.min_cell_voltage_mV = MIN_CELL_VOLTAGE_NCA_NCM;
-  datalayer.battery.info.max_cell_voltage_deviation_mV = MAX_CELL_DEVIATION_NCA_NCM;
-#endif  // TESLA_MODEL_SX_BATTERY
-
-#ifdef TESLA_MODEL_3Y_BATTERY  // Model 3/Y can be either LFP or NCM/A
-  strncpy(datalayer.system.info.battery_protocol, "Tesla Model 3/Y", 63);
+  strncpy(datalayer.system.info.battery_protocol, Name, 63);
   datalayer.system.info.battery_protocol[63] = '\0';
 #ifdef LFP_CHEMISTRY
   datalayer.battery.info.chemistry = battery_chemistry_enum::LFP;
@@ -2186,7 +1779,18 @@ void setup_battery(void) {  // Performs one time setup at startup
   datalayer.battery.info.min_cell_voltage_mV = MIN_CELL_VOLTAGE_NCA_NCM;
   datalayer.battery.info.max_cell_voltage_deviation_mV = MAX_CELL_DEVIATION_NCA_NCM;
 #endif  // !LFP_CHEMISTRY
-#endif  // TESLA_MODEL_3Y_BATTERY
 }
 
-#endif  // TESLA_BATTERY
+void TeslaModelSXBattery::setup(void) {
+  if (allows_contactor_closing) {
+    *allows_contactor_closing = true;
+  }
+
+  strncpy(datalayer.system.info.battery_protocol, Name, 63);
+  datalayer.system.info.battery_protocol[63] = '\0';
+  datalayer.battery.info.max_design_voltage_dV = MAX_PACK_VOLTAGE_SX_NCMA;
+  datalayer.battery.info.min_design_voltage_dV = MIN_PACK_VOLTAGE_SX_NCMA;
+  datalayer.battery.info.max_cell_voltage_mV = MAX_CELL_VOLTAGE_NCA_NCM;
+  datalayer.battery.info.min_cell_voltage_mV = MIN_CELL_VOLTAGE_NCA_NCM;
+  datalayer.battery.info.max_cell_voltage_deviation_mV = MAX_CELL_DEVIATION_NCA_NCM;
+}

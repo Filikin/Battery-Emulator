@@ -1,7 +1,8 @@
 #ifndef _DATALAYER_EXTENDED_H_
 #define _DATALAYER_EXTENDED_H_
 
-#include "../include.h"
+#include <stdint.h>
+#include "../../USER_SETTINGS.h"
 
 typedef struct {
   /** uint16_t */
@@ -38,31 +39,6 @@ typedef struct {
   uint16_t battery_HVIL_status = 0;
   int16_t battery_current_7E4 = 0;
 } DATALAYER_INFO_BOLTAMPERA;
-
-typedef struct {
-  /** uint16_t */
-  /** Terminal 30 - 12V SME Supply Voltage */
-  uint16_t T30_Voltage = 0;
-  /** Status HVIL, 1 HVIL OK, 0 HVIL disconnected*/
-  uint8_t hvil_status = 0;
-  /** Min/Max Cell SOH*/
-  uint16_t min_soh_state = 0;
-  uint16_t max_soh_state = 0;
-  uint32_t bms_uptime = 0;
-  uint8_t pyro_status_pss1 = 0;
-  uint8_t pyro_status_pss4 = 0;
-  uint8_t pyro_status_pss6 = 0;
-  int32_t iso_safety_positive = 0;
-  int32_t iso_safety_negative = 0;
-  int32_t iso_safety_parallel = 0;
-  int32_t allowable_charge_amps = 0;
-  int32_t allowable_discharge_amps = 0;
-  int16_t balancing_status = 0;
-  int16_t battery_voltage_after_contactor = 0;
-  unsigned long min_cell_voltage_data_age = 0;
-  unsigned long max_cell_voltage_data_age = 0;
-
-} DATALAYER_INFO_BMWIX;
 
 typedef struct {
   /** uint8_t */
@@ -121,48 +97,9 @@ typedef struct {
 } DATALAYER_INFO_BMWPHEV;
 
 typedef struct {
-  /** uint16_t */
-  /** SOC% raw battery value. Might not always reach 100% */
-  uint16_t SOC_raw = 0;
-  /** uint16_t */
-  /** SOC% instrumentation cluster value. Will always reach 100% */
-  uint16_t SOC_dash = 0;
-  /** uint16_t */
-  /** SOC% OBD2 value, polled actively */
-  uint16_t SOC_OBD2 = 0;
-  /** uint8_t */
-  /** Status isolation external, 0 not evaluated, 1 OK, 2 error active, 3 Invalid signal*/
-  uint8_t ST_iso_ext = 0;
-  /** uint8_t */
-  /** Status isolation external, 0 not evaluated, 1 OK, 2 error active, 3 Invalid signal*/
-  uint8_t ST_iso_int = 0;
-  /** uint8_t */
-  /** Status cooling valve error, 0 not evaluated, 1 OK valve closed, 2 error active valve open, 3 Invalid signal*/
-  uint8_t ST_valve_cooling = 0;
-  /** uint8_t */
-  /** Status interlock error, 0 not evaluated, 1 OK, 2 error active, 3 Invalid signal*/
-  uint8_t ST_interlock = 0;
-  /** uint8_t */
-  /** Status precharge, 0 no statement, 1 Not active closing not blocked, 2 error precharge blocked, 3 Invalid signal*/
-  uint8_t ST_precharge = 0;
-  /** uint8_t */
-  /** Status DC switch, 0 contactors open, 1 precharge ongoing, 2 contactors engaged, 3 Invalid signal*/
-  uint8_t ST_DCSW = 0;
-  /** uint8_t */
-  /** Status emergency, 0 not evaluated, 1 OK, 2 error active, 3 Invalid signal*/
-  uint8_t ST_EMG = 0;
-  /** uint8_t */
-  /** Status welding detection, 0 Contactors OK, 1 One contactor welded, 2 Two contactors welded, 3 Invalid signal*/
-  uint8_t ST_WELD = 0;
-  /** uint8_t */
-  /** Status isolation, 0 not evaluated, 1 OK, 2 error active, 3 Invalid signal*/
-  uint8_t ST_isolation = 0;
-  /** uint8_t */
-  /** Status cold shutoff valve, 0 OK, 1 Short circuit to GND, 2 Short circuit to 12V, 3 Line break, 6 Driver error, 12 Stuck, 13 Stuck, 15 Invalid Signal*/
-  uint8_t ST_cold_shutoff_valve = 0;
-} DATALAYER_INFO_BMWI3;
-
-typedef struct {
+  /** bool */
+  /** User requesting crash reset via WebUI*/
+  bool UserRequestCrashReset = false;
   /** bool */
   /** Which SOC method currently used. 0 = Estimated, 1 = Measured */
   bool SOC_method = 0;
@@ -181,7 +118,24 @@ typedef struct {
   /** uint16_t */
   /** Voltage polled OBD2*/
   uint16_t voltage_polled = 0;
-
+  /** int16_t */
+  /** All the temperature sensors inside the battery pack*/
+  int16_t battery_temperatures[10];
+  /** unknown values polled */
+  uint32_t unknown0 = 0;
+  uint32_t unknown1 = 0;
+  uint16_t chargePower = 0;
+  uint16_t charge_times = 0;
+  uint16_t dischargePower = 0;
+  uint16_t total_charged_ah = 0;
+  uint16_t total_discharged_ah = 0;
+  uint16_t total_charged_kwh = 0;
+  uint16_t total_discharged_kwh = 0;
+  uint16_t times_full_power = 0;
+  uint8_t unknown10 = 0;
+  uint8_t unknown11 = 0;
+  uint8_t unknown12 = 0;
+  uint8_t unknown13 = 0;
 } DATALAYER_INFO_BYDATTO3;
 
 typedef struct {
@@ -251,6 +205,143 @@ typedef struct {
 } DATALAYER_INFO_CELLPOWER;
 
 typedef struct {
+  bool UserRequestRestart = false;
+  bool UserRequestStop = false;
+  bool FaultBatteryVoltageDeviation = false;
+  bool FaultHighBatteryTemperature = false;
+  bool FaultBatteryCurrentDeviation = false;
+  bool FaultBatteryUnderVoltage = false;
+  bool FaultBatteryOverVoltage = false;
+  uint8_t CHADEMO_Status = 0;
+  uint8_t ControlProtocolNumberEV = 0;
+
+} DATALAYER_INFO_CHADEMO;
+
+typedef struct {
+  uint16_t soc_z = 0;
+  uint16_t soc_u = 0;
+  uint16_t soh_average = 0;
+  uint16_t max_regen_power = 0;
+  uint16_t max_discharge_power = 0;
+  int16_t average_temperature = 0;
+  int16_t minimum_temperature = 0;
+  int16_t maximum_temperature = 0;
+  uint16_t maximum_charge_power = 0;
+  uint16_t SOH_available_power = 0;
+  uint16_t SOH_generated_power = 0;
+  uint16_t lead_acid_voltage = 0;
+  uint8_t highest_cell_voltage_number = 0;
+  uint8_t lowest_cell_voltage_number = 0;
+  uint64_t cumulative_energy_when_discharging = 0;
+  uint64_t cumulative_energy_when_charging = 0;
+  uint64_t cumulative_energy_in_regen = 0;
+} DATALAYER_INFO_CMFAEV;
+
+typedef struct {
+  uint8_t MainConnectorState = 0;
+  uint16_t InsulationResistance = 0;
+  uint8_t InsulationDiag = 0;
+  bool InterlockOpen = false;
+  bool UserRequestContactorReset = false;
+  bool UserRequestCollisionReset = false;
+  bool UserRequestIsolationReset = false;
+  bool UserRequestDisableIsoMonitoring = false;
+  uint8_t pid_welding_detection = 0;
+  uint8_t pid_reason_open = 0;
+  uint8_t pid_contactor_status = 0;
+  uint8_t pid_negative_contactor_control = 0;
+  uint8_t pid_negative_contactor_status = 0;
+  uint8_t pid_positive_contactor_control = 0;
+  uint8_t pid_positive_contactor_status = 0;
+  uint8_t pid_contactor_negative = 0;
+  uint8_t pid_contactor_positive = 0;
+  uint8_t pid_precharge_relay_control = 0;
+  uint8_t pid_precharge_relay_status = 0;
+  uint8_t pid_recharge_status = 0;
+  uint8_t pid_delta_temperature = 0;
+  uint8_t pid_coldest_module = 0;
+  uint8_t pid_lowest_temperature = 0;
+  uint8_t pid_average_temperature = 0;
+  uint8_t pid_highest_temperature = 0;
+  uint8_t pid_hottest_module = 0;
+  uint16_t pid_avg_cell_voltage = 0;
+  int32_t pid_current = 0;
+  uint32_t pid_insulation_res_neg = 0;
+  uint32_t pid_insulation_res_pos = 0;
+  uint32_t pid_max_current_10s = 0;
+  uint32_t pid_max_discharge_10s = 0;
+  uint32_t pid_max_discharge_30s = 0;
+  uint32_t pid_max_charge_10s = 0;
+  uint32_t pid_max_charge_30s = 0;
+  uint32_t pid_energy_capacity = 0;
+  uint8_t pid_highest_cell_voltage_num = 0;
+  uint8_t pid_lowest_cell_voltage_num = 0;
+  uint16_t pid_sum_of_cells = 0;
+  uint16_t pid_cell_min_capacity = 0;
+  uint8_t pid_cell_voltage_measurement_status = 0;
+  uint32_t pid_insulation_res = 0;
+  uint16_t pid_pack_voltage = 0;
+  uint16_t pid_high_cell_voltage = 0;
+  uint16_t pid_low_cell_voltage = 0;
+  uint8_t pid_battery_energy = 0;
+  uint32_t pid_crash_counter = 0;
+  uint8_t pid_wire_crash = 0;
+  uint8_t pid_CAN_crash = 0;
+  uint32_t pid_history_data = 0;
+  uint32_t pid_lowsoc_counter = 0;
+  uint32_t pid_last_can_failure_detail = 0;
+  uint32_t pid_hw_version_num = 0;
+  uint32_t pid_sw_version_num = 0;
+  uint32_t pid_factory_mode_control = 0;
+  uint8_t pid_battery_serial[13] = {0};
+  uint32_t pid_aux_fuse_state = 0;
+  uint32_t pid_battery_state = 0;
+  uint32_t pid_precharge_short_circuit = 0;
+  uint32_t pid_eservice_plug_state = 0;
+  uint32_t pid_mainfuse_state = 0;
+  uint32_t pid_most_critical_fault = 0;
+  uint32_t pid_current_time = 0;
+  uint32_t pid_time_sent_by_car = 0;
+  uint32_t pid_12v = 0;
+  uint32_t pid_12v_abnormal = 0;
+  uint32_t pid_hvil_in_voltage = 0;
+  uint32_t pid_hvil_out_voltage = 0;
+  uint32_t pid_hvil_state = 0;
+  uint32_t pid_bms_state = 0;
+  uint32_t pid_vehicle_speed = 0;
+  uint32_t pid_time_spent_over_55c = 0;
+  uint32_t pid_contactor_closing_counter = 0;
+  uint32_t pid_date_of_manufacture = 0;
+} DATALAYER_INFO_ECMP;
+
+typedef struct {
+  /** uint8_t */
+  /** Battery software/hardware/serial versions, stores raw HEX values for ASCII chars */
+  uint8_t BatterySoftwareVersion[16] = {0};
+  uint8_t BatteryHardwareVersion[16] = {0};
+  uint8_t BatterySerialNumber[28] = {0};
+  /** int16_t */
+  /** Module temperatures 1-6 */
+  int16_t ModuleTemperatures[6] = {0};
+  /** uint16_t */
+  /** Various values polled via OBD2 PIDs */
+  uint16_t soc = 0;
+  uint16_t CC2voltage = 0;
+  uint16_t cellMaxVoltageNumber = 0;
+  uint16_t cellMinVoltageNumber = 0;
+  uint16_t cellTotalAmount = 0;
+  uint16_t specificialVoltage = 0;
+  uint16_t unknown1 = 0;
+  uint16_t rawSOCmax = 0;
+  uint16_t rawSOCmin = 0;
+  uint16_t unknown4 = 0;
+  uint16_t capModMax = 0;
+  uint16_t capModMin = 0;
+  uint16_t unknown7 = 0;
+  uint16_t unknown8 = 0;
+} DATALAYER_INFO_GEELY_GEOMETRY_C;
+
+typedef struct {
   uint8_t total_cell_count = 0;
   int16_t battery_12V = 0;
   uint8_t waterleakageSensor = 0;
@@ -259,16 +350,6 @@ typedef struct {
   uint8_t batteryManagementMode = 0;
   uint8_t BMS_ign = 0;
   uint8_t batteryRelay = 0;
-#ifdef DOUBLE_BATTERY
-  uint8_t battery2_total_cell_count = 0;
-  int16_t battery2_battery_12V = 0;
-  uint8_t battery2_waterleakageSensor = 0;
-  int8_t battery2_temperature_water_inlet = 0;
-  int8_t battery2_powerRelayTemperature = 0;
-  uint8_t battery2_batteryManagementMode = 0;
-  uint8_t battery2_BMS_ign = 0;
-  uint8_t battery2_batteryRelay = 0;
-#endif  //DOUBLE BATTERY
 } DATALAYER_INFO_KIAHYUNDAI64;
 
 typedef struct {
@@ -319,8 +400,6 @@ typedef struct {
   uint16_t battery_expected_energy_remaining_m1 = 0;
   bool battery_full_charge_complete = false;
   bool battery_fully_charged = false;
-  uint16_t battery_total_discharge = 0;
-  uint16_t battery_total_charge = 0;
   uint16_t battery_BrickVoltageMax = 0;
   uint16_t battery_BrickVoltageMin = 0;
   uint8_t battery_BrickVoltageMaxNum = 0;
@@ -583,6 +662,14 @@ typedef struct {
   uint8_t status_HV_line = 0;
   /** uint8_t */
   /** 0 = OK, 1 = Not OK, 0x06 = init, 0x07 = fault */
+  bool BMS_fault_performance = false;  //Error: Battery performance is limited (e.g. due to sensor or fan failure)
+  bool BMS_fault_emergency_shutdown_crash =
+      false;  //Error: Safety-critical error (crash detection) Battery contactors are already opened / will be opened immediately Signal is read directly by the EMS and initiates an AKS of the PWR and an active discharge of the DC link
+
+  bool BMS_error_shutdown_request =
+      false;  // Fault: Fault condition, requires battery contactors to be opened internal battery error; Advance notification of an impending opening of the battery contactors by the BMS
+  bool BMS_error_shutdown =
+      false;  // Fault: Fault condition, requires battery contactors to be opened Internal battery error, battery contactors opened without notice by the BMS
   uint8_t warning_support = 0;
   /** uint32_t */
   /** Isolation resistance in kOhm */
@@ -609,6 +696,7 @@ typedef struct {
   float temp_points[18] = {0};
   uint16_t celltemperature_dC[56] = {0};
   uint16_t battery_temperature_dC = 0;
+  uint8_t BMS_welded_contactors_status = 0;
 } DATALAYER_INFO_MEB;
 
 typedef struct {
@@ -642,6 +730,52 @@ typedef struct {
 } DATALAYER_INFO_VOLVO_POLESTAR;
 
 typedef struct {
+  uint16_t soc_bms = 0;
+  uint16_t soc_calc = 0;
+  uint16_t soc_rescaled = 0;
+  uint16_t soh_bms = 0;
+  uint16_t BECMsupplyVoltage = 0;
+
+  uint16_t BECMBatteryVoltage = 0;
+  uint16_t BECMBatteryCurrent = 0;
+  uint16_t BECMUDynMaxLim = 0;
+  uint16_t BECMUDynMinLim = 0;
+
+  uint16_t HvBattPwrLimDcha1 = 0;
+  uint16_t HvBattPwrLimDchaSoft = 0;
+  //uint16_t HvBattPwrLimDchaSlowAgi = 0;
+  //uint16_t HvBattPwrLimChrgSlowAgi = 0;
+
+  uint8_t HVSysRlySts = 0;
+  uint8_t HVSysDCRlySts1 = 0;
+  uint8_t HVSysDCRlySts2 = 0;
+  uint8_t HVSysIsoRMonrSts = 0;
+  /** User requesting DTC reset via WebUI*/
+  bool UserRequestDTCreset = false;
+  /** User requesting DTC readout via WebUI*/
+  bool UserRequestDTCreadout = false;
+  /** User requesting BECM reset via WebUI*/
+  bool UserRequestBECMecuReset = false;
+
+} DATALAYER_INFO_VOLVO_HYBRID;
+
+typedef struct {
+  /** uint8_t */
+  uint8_t CUV = 0;
+  uint8_t HVBIR = 0;
+  uint8_t HVBUV = 0;
+  uint8_t EOCR = 0;
+  uint8_t HVBOC = 0;
+  uint8_t HVBOT = 0;
+  uint8_t HVBOV = 0;
+  uint8_t COV = 0;
+  uint16_t mileage_km = 0;
+  uint16_t alltime_kWh = 0;
+} DATALAYER_INFO_ZOE;
+
+typedef struct {
+  /** User requesting NVROL reset via WebUI*/
+  bool UserRequestNVROLReset = false;
   /** uint16_t */
   /** Values WIP*/
   uint16_t battery_soc = 0;
@@ -671,7 +805,6 @@ typedef struct {
   uint16_t battery_balance_capacity_wake = 0;
   uint16_t battery_balance_time_wake = 0;
   uint16_t battery_bms_state = 0;
-  uint16_t battery_balance_switches = 0;
   uint16_t battery_energy_complete = 0;
   uint16_t battery_energy_partial = 0;
   uint16_t battery_slave_failures = 0;
@@ -690,16 +823,21 @@ typedef struct {
 class DataLayerExtended {
  public:
   DATALAYER_INFO_BOLTAMPERA boltampera;
-  DATALAYER_INFO_BMWIX bmwix;
   DATALAYER_INFO_BMWPHEV bmwphev;
-  DATALAYER_INFO_BMWI3 bmwi3;
   DATALAYER_INFO_BYDATTO3 bydAtto3;
   DATALAYER_INFO_CELLPOWER cellpower;
+  DATALAYER_INFO_CHADEMO chademo;
+  DATALAYER_INFO_CMFAEV CMFAEV;
+  DATALAYER_INFO_ECMP stellantisECMP;
+  DATALAYER_INFO_GEELY_GEOMETRY_C geometryC;
   DATALAYER_INFO_KIAHYUNDAI64 KiaHyundai64;
+  DATALAYER_INFO_KIAHYUNDAI64 KiaHyundai64_2;
   DATALAYER_INFO_TESLA tesla;
   DATALAYER_INFO_NISSAN_LEAF nissanleaf;
   DATALAYER_INFO_MEB meb;
   DATALAYER_INFO_VOLVO_POLESTAR VolvoPolestar;
+  DATALAYER_INFO_VOLVO_HYBRID VolvoHybrid;
+  DATALAYER_INFO_ZOE zoe;
   DATALAYER_INFO_ZOE_PH2 zoePH2;
 };
 

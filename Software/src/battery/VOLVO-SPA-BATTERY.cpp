@@ -1,107 +1,12 @@
-#include "../include.h"
-#ifdef VOLVO_SPA_BATTERY
+#include "VOLVO-SPA-BATTERY.h"
+#include "../communication/can/comm_can.h"
 #include "../datalayer/datalayer.h"
 #include "../datalayer/datalayer_extended.h"  //For "More battery info" webpage
 #include "../devboard/utils/events.h"
-#include "VOLVO-SPA-BATTERY.h"
+#include "../include.h"
 
-/* Do not change code below unless you are sure what you are doing */
-static unsigned long previousMillis100 = 0;  // will store last time a 100ms CAN Message was send
-static unsigned long previousMillis1s = 0;   // will store last time a 1s CAN Message was send
-static unsigned long previousMillis60s = 0;  // will store last time a 60s CAN Message was send
-
-static float BATT_U = 0;                 //0x3A
-static float MAX_U = 0;                  //0x3A
-static float MIN_U = 0;                  //0x3A
-static float BATT_I = 0;                 //0x3A
-static int32_t CHARGE_ENERGY = 0;        //0x1A1
-static uint8_t BATT_ERR_INDICATION = 0;  //0x413
-static float BATT_T_MAX = 0;             //0x413
-static float BATT_T_MIN = 0;             //0x413
-static float BATT_T_AVG = 0;             //0x413
-static uint16_t SOC_BMS = 0;             //0X37D
-static uint16_t SOC_CALC = 0;
-static uint16_t CELL_U_MAX = 3700;            //0x37D
-static uint16_t CELL_U_MIN = 3700;            //0x37D
-static uint8_t CELL_ID_U_MAX = 0;             //0x37D
-static uint16_t HvBattPwrLimDchaSoft = 0;     //0x369
-static uint16_t HvBattPwrLimDcha1 = 0;        //0x175
-static uint16_t HvBattPwrLimDchaSlowAgi = 0;  //0x177
-static uint16_t HvBattPwrLimChrgSlowAgi = 0;  //0x177
-static uint8_t batteryModuleNumber = 0x10;    // First battery module
-static uint8_t battery_request_idx = 0;
-static uint8_t rxConsecutiveFrames = 0;
-static uint16_t min_max_voltage[2];  //contains cell min[0] and max[1] values in mV
-static uint8_t cellcounter = 0;
-static uint32_t remaining_capacity = 0;
-static uint16_t cell_voltages[108];  //array with all the cellvoltages
-static bool startedUp = false;
-static uint8_t DTC_reset_counter = 0;
-
-CAN_frame VOLVO_536 = {.FD = false,
-                       .ext_ID = false,
-                       .DLC = 8,
-                       .ID = 0x536,
-                       //.data = {0x00, 0x40, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00}};  //Network manage frame
-                       .data = {0x00, 0x40, 0x40, 0x01, 0x00, 0x00, 0x00, 0x00}};  //Network manage frame
-
-CAN_frame VOLVO_140_CLOSE = {.FD = false,
-                             .ext_ID = false,
-                             .DLC = 8,
-                             .ID = 0x140,
-                             .data = {0x00, 0x02, 0x00, 0xB7, 0xFF, 0x03, 0xFF, 0x82}};  //Close contactors message
-
-CAN_frame VOLVO_140_OPEN = {.FD = false,
-                            .ext_ID = false,
-                            .DLC = 8,
-                            .ID = 0x140,
-                            .data = {0x00, 0x02, 0x00, 0x9E, 0xFF, 0x03, 0xFF, 0x82}};  //Open contactor message
-
-CAN_frame VOLVO_372 = {
-    .FD = false,
-    .ext_ID = false,
-    .DLC = 8,
-    .ID = 0x372,
-    .data = {0x00, 0xA6, 0x07, 0x14, 0x04, 0x00, 0x80, 0x00}};  //Ambient Temp -->>VERIFY this data content!!!<<--
-CAN_frame VOLVO_CELL_U_Req = {.FD = false,
-                              .ext_ID = false,
-                              .DLC = 8,
-                              .ID = 0x735,
-                              .data = {0x03, 0x22, 0x4B, 0x00, 0x00, 0x00, 0x00, 0x00}};  //Cell voltage request frame
-CAN_frame VOLVO_FlowControl = {.FD = false,
-                               .ext_ID = false,
-                               .DLC = 8,
-                               .ID = 0x735,
-                               .data = {0x30, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00}};  //Flowcontrol
-CAN_frame VOLVO_SOH_Req = {.FD = false,
-                           .ext_ID = false,
-                           .DLC = 8,
-                           .ID = 0x735,
-                           .data = {0x03, 0x22, 0x49, 0x6D, 0x00, 0x00, 0x00, 0x00}};  //Battery SOH request frame
-CAN_frame VOLVO_BECMsupplyVoltage_Req = {
-    .FD = false,
-    .ext_ID = false,
-    .DLC = 8,
-    .ID = 0x735,
-    .data = {0x03, 0x22, 0xF4, 0x42, 0x00, 0x00, 0x00, 0x00}};  //BECM supply voltage request frame
-CAN_frame VOLVO_DTC_Erase = {.FD = false,
-                             .ext_ID = false,
-                             .DLC = 8,
-                             .ID = 0x7FF,
-                             .data = {0x04, 0x14, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00}};  //Global DTC erase
-CAN_frame VOLVO_BECM_ECUreset = {
-    .FD = false,
-    .ext_ID = false,
-    .DLC = 8,
-    .ID = 0x735,
-    .data = {0x02, 0x11, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00}};  //BECM ECU reset command (reboot/powercycle BECM)
-CAN_frame VOLVO_DTCreadout = {.FD = false,
-                              .ext_ID = false,
-                              .DLC = 8,
-                              .ID = 0x7FF,
-                              .data = {0x02, 0x19, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00}};  //Global DTC readout
-
-void update_values_battery() {  //This function maps all the values fetched via CAN to the correct parameters used for the inverter
+void VolvoSpaBattery::
+    update_values() {  //This function maps all the values fetched via CAN to the correct parameters used for the inverter
   uint8_t cnt = 0;
 
   // Update webserver datalayer
@@ -134,12 +39,13 @@ void update_values_battery() {  //This function maps all the values fetched via 
     datalayer_extended.VolvoPolestar.UserRequestDTCreadout = false;
   }
 
-  remaining_capacity = (78200 - CHARGE_ENERGY);
+  datalayer.battery.status.remaining_capacity_Wh = (datalayer.battery.info.total_capacity_Wh - CHARGE_ENERGY);
 
   //datalayer.battery.status.real_soc = SOC_BMS;			// Use BMS reported SOC, havent figured out how to get the BMS to calibrate empty/full yet
-  SOC_CALC = remaining_capacity / 78;  // Use calculated SOC based on remaining_capacity
+  // Use calculated SOC based on remaining_capacity
+  SOC_CALC = (datalayer.battery.status.remaining_capacity_Wh / (datalayer.battery.info.total_capacity_Wh / 1000));
 
-  datalayer.battery.status.real_soc = SOC_CALC * 10;
+  datalayer.battery.status.real_soc = SOC_CALC * 10;  //Add one decimal to make it pptt
 
   if (BATT_U > MAX_U)  // Protect if overcharged
   {
@@ -151,7 +57,6 @@ void update_values_battery() {  //This function maps all the values fetched via 
 
   datalayer.battery.status.voltage_dV = BATT_U * 10;
   datalayer.battery.status.current_dA = BATT_I * 10;
-  datalayer.battery.status.remaining_capacity_Wh = remaining_capacity;
 
   datalayer.battery.status.max_discharge_power_W = HvBattPwrLimDchaSlowAgi * 1000;  //kW to W
   datalayer.battery.status.max_charge_power_W = HvBattPwrLimChrgSlowAgi * 1000;     //kW to W
@@ -164,6 +69,22 @@ void update_values_battery() {  //This function maps all the values fetched via 
   //Map all cell voltages to the global array
   for (int i = 0; i < 108; ++i) {
     datalayer.battery.status.cell_voltages_mV[i] = cell_voltages[i];
+  }
+
+  //If we have enough cell values populated (atleast 96 read) AND number_of_cells not initialized yet
+  if (cell_voltages[95] > 0 && datalayer.battery.info.number_of_cells == 0) {
+    // We can determine whether we have 96S or 108S battery
+    if (datalayer.battery.status.cell_voltages_mV[107] > 0) {
+      datalayer.battery.info.number_of_cells = 108;
+      datalayer.battery.info.max_design_voltage_dV = MAX_PACK_VOLTAGE_108S_DV;
+      datalayer.battery.info.min_design_voltage_dV = MIN_PACK_VOLTAGE_108S_DV;
+      datalayer.battery.info.total_capacity_Wh = 78200;
+    } else {
+      datalayer.battery.info.number_of_cells = 96;
+      datalayer.battery.info.max_design_voltage_dV = MAX_PACK_VOLTAGE_96S_DV;
+      datalayer.battery.info.min_design_voltage_dV = MIN_PACK_VOLTAGE_96S_DV;
+      datalayer.battery.info.total_capacity_Wh = 69511;
+    }
   }
 
 #ifdef DEBUG_LOG
@@ -181,8 +102,6 @@ void update_values_battery() {  //This function maps all the values fetched via 
   logging.println(MAX_U);
   logging.print("Battery minimum voltage limit: ");
   logging.println(MIN_U);
-  logging.print("Remaining Energy: ");
-  logging.println(remaining_capacity);
   logging.print("Discharge limit: ");
   logging.println(HvBattPwrLimDchaSoft);
   logging.print("Battery Error Indication: ");
@@ -212,7 +131,7 @@ void update_values_battery() {  //This function maps all the values fetched via 
 #endif
 }
 
-void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
+void VolvoSpaBattery::handle_incoming_can_frame(CAN_frame rx_frame) {
   datalayer.battery.status.CAN_battery_still_alive = CAN_STILL_ALIVE;
   switch (rx_frame.ID) {
     case 0x3A:
@@ -412,7 +331,7 @@ void handle_incoming_can_frame_battery(CAN_frame rx_frame) {
   }
 }
 
-void readCellVoltages() {
+void VolvoSpaBattery::readCellVoltages() {
   battery_request_idx = 0;
   batteryModuleNumber = 0x10;
   rxConsecutiveFrames = 0;
@@ -420,16 +339,9 @@ void readCellVoltages() {
   transmit_can_frame(&VOLVO_CELL_U_Req, can_config.battery);  //Send cell voltage read request for first module
 }
 
-void transmit_can_battery() {
-  unsigned long currentMillis = millis();
+void VolvoSpaBattery::transmit_can(unsigned long currentMillis) {
   // Send 100ms CAN Message
   if (currentMillis - previousMillis100 >= INTERVAL_100_MS) {
-    // Check if sending of CAN messages has been delayed too much.
-    if ((currentMillis - previousMillis100 >= INTERVAL_100_MS_DELAYED) && (currentMillis > BOOTUP_TIME)) {
-      set_event(EVENT_CAN_OVERRUN, (currentMillis - previousMillis100));
-    } else {
-      clear_event(EVENT_CAN_OVERRUN);
-    }
     previousMillis100 = currentMillis;
 
     transmit_can_frame(&VOLVO_536, can_config.battery);  //Send 0x536 Network managing frame to keep BMS alive
@@ -462,14 +374,14 @@ void transmit_can_battery() {
   }
 }
 
-void setup_battery(void) {  // Performs one time setup at startup
-  strncpy(datalayer.system.info.battery_protocol, "Volvo / Polestar 78kWh battery", 63);
+void VolvoSpaBattery::setup(void) {  // Performs one time setup at startup
+  strncpy(datalayer.system.info.battery_protocol, Name, 63);
   datalayer.system.info.battery_protocol[63] = '\0';
-  datalayer.battery.info.number_of_cells = 108;
-  datalayer.battery.info.max_design_voltage_dV = MAX_PACK_VOLTAGE_DV;
-  datalayer.battery.info.min_design_voltage_dV = MIN_PACK_VOLTAGE_DV;
+  datalayer.battery.info.number_of_cells = 0;        // Initializes when all cells have been read
+  datalayer.battery.info.total_capacity_Wh = 78200;  //Startout in 78kWh mode (This value used for SOC calc)
+  datalayer.battery.info.max_design_voltage_dV = MAX_PACK_VOLTAGE_108S_DV;  //Startout with max allowed range
+  datalayer.battery.info.min_design_voltage_dV = MIN_PACK_VOLTAGE_96S_DV;   //Startout with min allowed range
   datalayer.battery.info.max_cell_voltage_mV = MAX_CELL_VOLTAGE_MV;
   datalayer.battery.info.min_cell_voltage_mV = MIN_CELL_VOLTAGE_MV;
   datalayer.battery.info.max_cell_voltage_deviation_mV = MAX_CELL_DEVIATION_MV;
 }
-#endif

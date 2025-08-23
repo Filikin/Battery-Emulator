@@ -1,56 +1,11 @@
 #include "events.h"
 #include "../../datalayer/datalayer.h"
-#ifndef UNIT_TEST
-#include <EEPROM.h>
-#endif
 
 #include "../../../USER_SETTINGS.h"
-#include "timer.h"
-
-#define EE_NOF_EVENT_ENTRIES 30
-#define EE_EVENT_ENTRY_SIZE sizeof(EVENT_LOG_ENTRY_TYPE)
-#define EE_WRITE_PERIOD_MINUTES 10
-
-/** EVENT LOG STRUCTURE
- * 
- * The event log is stored in a simple header-block structure. The
- * header contains a magic number to identify it as an event log,
- * a head index and a tail index. The head index points to the last
- * recorded event, the tail index points to the "oldest" event in the
- * log. The event log is set up like a circular buffer, so we only
- * store the set amount of events. The head continuously overwrites
- * the oldest events, and both the head and tail indices wrap around
- * to 0 at the end of the event log:
- * 
- * [ HEADER ]
- * [ MAGIC NUMBER ][ HEAD INDEX ][ TAIL INDEX ][ EVENT BLOCK 0 ][ EVENT BLOCK 1]...
- * [ 2 bytes      ][ 2 bytes    ][ 2 bytes    ][ 6 bytes       ][ 6 bytes      ]
- * 
- * 1024 bytes are allocated to the event log in flash emulated EEPROM,
- * giving room for (1024 - (2 + 2 + 2)) / 6 ~= 169 events
- * 
- * For now, we store 30 to make it easier to handle initial debugging.
-*/
-#define EE_EVENT_LOG_START_ADDRESS 0
-#define EE_EVENT_LOG_HEAD_INDEX_ADDRESS EE_EVENT_LOG_START_ADDRESS + 2
-#define EE_EVENT_LOG_TAIL_INDEX_ADDRESS EE_EVENT_LOG_HEAD_INDEX_ADDRESS + 2
-#define EE_EVENT_ENTRY_START_ADDRESS EE_EVENT_LOG_TAIL_INDEX_ADDRESS + 2
-
-typedef struct {
-  EVENTS_ENUM_TYPE event;
-  uint8_t millisrolloverCount;
-  uint32_t timestamp;
-  uint8_t data;
-} EVENT_LOG_ENTRY_TYPE;
 
 typedef struct {
   EVENTS_STRUCT_TYPE entries[EVENT_NOF_EVENTS];
-  MyTimer ee_timer;
   EVENTS_LEVEL_TYPE level;
-  uint16_t event_log_head_index;
-  uint16_t event_log_tail_index;
-  uint8_t nof_logged_events;
-  uint16_t nof_eeprom_writes;
 } EVENT_TYPE;
 
 /* Local variables */
@@ -58,75 +13,17 @@ static EVENT_TYPE events;
 static const char* EVENTS_ENUM_TYPE_STRING[] = {EVENTS_ENUM_TYPE(GENERATE_STRING)};
 static const char* EVENTS_LEVEL_TYPE_STRING[] = {EVENTS_LEVEL_TYPE(GENERATE_STRING)};
 
-static uint32_t lastMillis = millis();
-
 /* Local function prototypes */
 static void set_event(EVENTS_ENUM_TYPE event, uint8_t data, bool latched);
 static void update_event_level(void);
 static void update_bms_status(void);
-static void log_event(EVENTS_ENUM_TYPE event, uint8_t millisrolloverCount, uint32_t timestamp, uint8_t data);
-static void print_event_log(void);
-
-uint8_t millisrolloverCount = 0;
-
-/* Exported functions */
-
-/* Main execution function, should handle various continuous functionality */
-void run_event_handling(void) {
-  uint32_t currentMillis = millis();
-  if (currentMillis < lastMillis) {  // Overflow detected
-    millisrolloverCount++;
-  }
-  lastMillis = currentMillis;
-
-  update_event_level();
-}
 
 /* Initialization function */
 void init_events(void) {
-
-  EEPROM.begin(1024);
-  events.nof_logged_events = 0;
-
-  uint16_t header = EEPROM.readUShort(EE_EVENT_LOG_START_ADDRESS);
-  if (header != EE_MAGIC_HEADER_VALUE) {
-    // The header doesn't appear to be a compatible event log, clear it and initialize
-    EEPROM.writeUShort(EE_EVENT_LOG_START_ADDRESS, EE_MAGIC_HEADER_VALUE);
-    EEPROM.writeUShort(EE_EVENT_LOG_HEAD_INDEX_ADDRESS, 0);
-    EEPROM.writeUShort(EE_EVENT_LOG_TAIL_INDEX_ADDRESS, 0);
-
-    // Prepare an empty event block to write
-    EVENT_LOG_ENTRY_TYPE entry = {.event = EVENT_NOF_EVENTS, .millisrolloverCount = 0, .timestamp = 0, .data = 0};
-
-    // Put the event in (what I guess is) the RAM EEPROM mirror, or write buffer
-
-    for (int i = 0; i < EE_NOF_EVENT_ENTRIES; i++) {
-      // Start at the oldest event, work through the log all the way the the head
-      int address = EE_EVENT_ENTRY_START_ADDRESS + EE_EVENT_ENTRY_SIZE * i;
-      EEPROM.put(address, entry);
-    }
-
-    // Push changes to eeprom
-    EEPROM.commit();
-#ifdef DEBUG_LOG
-    logging.println("EEPROM wasn't ready");
-#endif
-  } else {
-    events.event_log_head_index = EEPROM.readUShort(EE_EVENT_LOG_HEAD_INDEX_ADDRESS);
-    events.event_log_tail_index = EEPROM.readUShort(EE_EVENT_LOG_TAIL_INDEX_ADDRESS);
-#ifdef DEBUG_LOG
-    logging.println("EEPROM was initialized for event logging");
-    logging.println("head: " + String(events.event_log_head_index) + ", tail: " + String(events.event_log_tail_index));
-#endif
-    print_event_log();
-  }
-
   for (uint16_t i = 0; i < EVENT_NOF_EVENTS; i++) {
     events.entries[i].data = 0;
     events.entries[i].timestamp = 0;
-    events.entries[i].millisrolloverCount = 0;
     events.entries[i].occurences = 0;
-    events.entries[i].log = true;
     events.entries[i].MQTTpublished = false;  // Not published by default
   }
 
@@ -134,14 +31,16 @@ void init_events(void) {
   events.entries[EVENT_CANMCP2515_INIT_FAILURE].level = EVENT_LEVEL_WARNING;
   events.entries[EVENT_CANFD_BUFFER_FULL].level = EVENT_LEVEL_WARNING;
   events.entries[EVENT_CAN_BUFFER_FULL].level = EVENT_LEVEL_WARNING;
-  events.entries[EVENT_CAN_OVERRUN].level = EVENT_LEVEL_INFO;
+  events.entries[EVENT_TASK_OVERRUN].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_CAN_CORRUPTED_WARNING].level = EVENT_LEVEL_WARNING;
-  events.entries[EVENT_CAN_NATIVE_TX_FAILURE].level = EVENT_LEVEL_ERROR;
+  events.entries[EVENT_CAN_NATIVE_TX_FAILURE].level = EVENT_LEVEL_WARNING;
   events.entries[EVENT_CAN_BATTERY_MISSING].level = EVENT_LEVEL_ERROR;
   events.entries[EVENT_CAN_BATTERY2_MISSING].level = EVENT_LEVEL_WARNING;
   events.entries[EVENT_CAN_CHARGER_MISSING].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_CAN_INVERTER_MISSING].level = EVENT_LEVEL_WARNING;
   events.entries[EVENT_CONTACTOR_WELDED].level = EVENT_LEVEL_WARNING;
+  events.entries[EVENT_CPU_OVERHEATING].level = EVENT_LEVEL_WARNING;
+  events.entries[EVENT_CPU_OVERHEATED].level = EVENT_LEVEL_ERROR;
   events.entries[EVENT_WATER_INGRESS].level = EVENT_LEVEL_ERROR;
   events.entries[EVENT_CHARGE_LIMIT_EXCEEDED].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_DISCHARGE_LIMIT_EXCEEDED].level = EVENT_LEVEL_INFO;
@@ -175,6 +74,7 @@ void init_events(void) {
   events.entries[EVENT_INVERTER_OPEN_CONTACTOR].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_INTERFACE_MISSING].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_MODBUS_INVERTER_MISSING].level = EVENT_LEVEL_INFO;
+  events.entries[EVENT_NO_ENABLE_DETECTED].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_ERROR_OPEN_CONTACTOR].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_CELL_CRITICAL_UNDER_VOLTAGE].level = EVENT_LEVEL_ERROR;
   events.entries[EVENT_CELL_CRITICAL_OVER_VOLTAGE].level = EVENT_LEVEL_ERROR;
@@ -193,7 +93,7 @@ void init_events(void) {
   events.entries[EVENT_SERIAL_RX_FAILURE].level = EVENT_LEVEL_ERROR;
   events.entries[EVENT_SERIAL_TX_FAILURE].level = EVENT_LEVEL_ERROR;
   events.entries[EVENT_SERIAL_TRANSMITTER_FAILURE].level = EVENT_LEVEL_ERROR;
-  events.entries[EVENT_EEPROM_WRITE].level = EVENT_LEVEL_INFO;
+  events.entries[EVENT_SMA_PAIRING].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_RESET_UNKNOWN].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_RESET_POWERON].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_RESET_EXT].level = EVENT_LEVEL_INFO;
@@ -210,20 +110,20 @@ void init_events(void) {
   events.entries[EVENT_RESET_EFUSE].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_RESET_PWR_GLITCH].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_RESET_CPU_LOCKUP].level = EVENT_LEVEL_WARNING;
+  events.entries[EVENT_RJXZS_LOG].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_PAUSE_BEGIN].level = EVENT_LEVEL_WARNING;
   events.entries[EVENT_PAUSE_END].level = EVENT_LEVEL_INFO;
+  events.entries[EVENT_PID_FAILED].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_WIFI_CONNECT].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_WIFI_DISCONNECT].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_MQTT_CONNECT].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_MQTT_DISCONNECT].level = EVENT_LEVEL_INFO;
   events.entries[EVENT_EQUIPMENT_STOP].level = EVENT_LEVEL_ERROR;
   events.entries[EVENT_SD_INIT_FAILED].level = EVENT_LEVEL_WARNING;
+  events.entries[EVENT_PERIODIC_BMS_RESET].level = EVENT_LEVEL_INFO;
+  events.entries[EVENT_PERIODIC_BMS_RESET_AT_INIT_SUCCESS].level = EVENT_LEVEL_INFO;
+  events.entries[EVENT_PERIODIC_BMS_RESET_AT_INIT_FAILED].level = EVENT_LEVEL_WARNING;
   events.entries[EVENT_BATTERY_TEMP_DEVIATION_HIGH].level = EVENT_LEVEL_WARNING;
-
-  events.entries[EVENT_EEPROM_WRITE].log = false;  // Don't log the logger...
-
-  // Write to EEPROM every X minutes (if an event has been set)
-  events.ee_timer.set_interval(EE_WRITE_PERIOD_MINUTES * 60 * 1000);
 }
 
 void set_event(EVENTS_ENUM_TYPE event, uint8_t data) {
@@ -243,14 +143,11 @@ void clear_event(EVENTS_ENUM_TYPE event) {
 }
 
 void reset_all_events() {
-  events.nof_logged_events = 0;
   for (uint16_t i = 0; i < EVENT_NOF_EVENTS; i++) {
     events.entries[i].data = 0;
     events.entries[i].state = EVENT_STATE_INACTIVE;
     events.entries[i].timestamp = 0;
-    events.entries[i].millisrolloverCount = 0;
     events.entries[i].occurences = 0;
-    events.entries[i].log = true;
     events.entries[i].MQTTpublished = false;  // Not published by default
   }
   events.level = EVENT_LEVEL_INFO;
@@ -271,11 +168,11 @@ const char* get_event_message_string(EVENTS_ENUM_TYPE event) {
     case EVENT_CANMCP2515_INIT_FAILURE:
       return "CAN-MCP addon initialization failed. Check hardware";
     case EVENT_CANFD_BUFFER_FULL:
-      return "MCP2518FD buffer overflowed. Some CAN messages were not sent. Contact developers.";
+      return "MCP2518FD message failed to send. Buffer full or no one on the bus to ACK the message!";
     case EVENT_CAN_BUFFER_FULL:
-      return "MCP2515 buffer overflowed. Some CAN messages were not sent. Contact developers.";
-    case EVENT_CAN_OVERRUN:
-      return "CAN message failed to send within defined time. Contact developers, CPU load might be too high.";
+      return "MCP2515 message failed to send. Buffer full or no one on the bus to ACK the message!";
+    case EVENT_TASK_OVERRUN:
+      return "Task took too long to complete. CPU load might be too high. Info message, no action required.";
     case EVENT_CAN_CORRUPTED_WARNING:
       return "High amount of corrupted CAN messages detected. Check CAN wire shielding!";
     case EVENT_CAN_NATIVE_TX_FAILURE:
@@ -290,6 +187,10 @@ const char* get_event_message_string(EVENTS_ENUM_TYPE event) {
       return "Inverter not sending messages via CAN for the last 60 seconds. Check wiring!";
     case EVENT_CONTACTOR_WELDED:
       return "Contactors sticking/welded. Inspect battery with caution!";
+    case EVENT_CPU_OVERHEATING:
+      return "Battery-Emulator CPU overheating! Increase airflow/cooling to increase hardware lifespan!";
+    case EVENT_CPU_OVERHEATED:
+      return "Battery-Emulator CPU melting! Performing controlled shutdown until temperature drops!";
     case EVENT_CHARGE_LIMIT_EXCEEDED:
       return "Inverter is charging faster than battery is allowing.";
     case EVENT_DISCHARGE_LIMIT_EXCEEDED:
@@ -365,6 +266,8 @@ const char* get_event_message_string(EVENTS_ENUM_TYPE event) {
              "Check other error code for reason!";
     case EVENT_MODBUS_INVERTER_MISSING:
       return "Modbus inverter has not sent any data. Inspect communication wiring!";
+    case EVENT_NO_ENABLE_DETECTED:
+      return "Inverter Enable line has not been active for a long time. Check Wiring!";
     case EVENT_CELL_CRITICAL_UNDER_VOLTAGE:
       return "CELL VOLTAGE CRITICALLY LOW! Not possible to continue. Inspect battery!";
     case EVENT_CELL_UNDER_VOLTAGE:
@@ -395,12 +298,12 @@ const char* get_event_message_string(EVENTS_ENUM_TYPE event) {
       return "Error in serial function: No ACK from receiver!";
     case EVENT_SERIAL_TRANSMITTER_FAILURE:
       return "Error in serial function: Some ERROR level fault in transmitter, received by receiver";
+    case EVENT_SMA_PAIRING:
+      return "SMA inverter trying to pair, contactors will close and open according to Enable line";
     case EVENT_OTA_UPDATE:
       return "OTA update started!";
     case EVENT_OTA_UPDATE_TIMEOUT:
       return "OTA update timed out!";
-    case EVENT_EEPROM_WRITE:
-      return "The EEPROM was written";
     case EVENT_RESET_UNKNOWN:
       return "The board was reset unexpectedly, and reason can't be determined";
     case EVENT_RESET_POWERON:
@@ -434,10 +337,14 @@ const char* get_event_message_string(EVENTS_ENUM_TYPE event) {
       return "The board was reset due to a detected power glitch";
     case EVENT_RESET_CPU_LOCKUP:
       return "The board was reset due to CPU lockup. Inform developers!";
+    case EVENT_RJXZS_LOG:
+      return "Error code active in RJXZS BMS. Clear via their smartphone app!";
     case EVENT_PAUSE_BEGIN:
       return "The emulator is trying to pause the battery.";
     case EVENT_PAUSE_END:
       return "The emulator is attempting to resume battery operation from pause.";
+    case EVENT_PID_FAILED:
+      return "Failed to write PID request to battery";
     case EVENT_WIFI_CONNECT:
       return "Wifi connected.";
     case EVENT_WIFI_DISCONNECT:
@@ -447,9 +354,16 @@ const char* get_event_message_string(EVENTS_ENUM_TYPE event) {
     case EVENT_MQTT_DISCONNECT:
       return "MQTT disconnected.";
     case EVENT_EQUIPMENT_STOP:
-      return "EQUIPMENT STOP ACTIVATED!!!";
+      return "User requested stop, either via equipment stop circuit or webserver Open Contactor button";
     case EVENT_SD_INIT_FAILED:
       return "SD card initialization failed, check hardware. Power must be removed to reset the SD card.";
+    case EVENT_PERIODIC_BMS_RESET:
+      return "BMS Reset Event Completed.";
+    case EVENT_PERIODIC_BMS_RESET_AT_INIT_SUCCESS:
+      return "Successfully syncronised with the NTP Server. BMS will reset every 24 hours at defined time";
+    case EVENT_PERIODIC_BMS_RESET_AT_INIT_FAILED:
+      return "Failed to syncronise with the NTP Server. BMS will reset every 24 hours from when the emulator was "
+             "powered on";
     default:
       return "";
   }
@@ -473,6 +387,8 @@ EVENTS_LEVEL_TYPE get_event_level(void) {
   return events.level;
 }
 
+uint64_t get_timestamp(unsigned long currentMillis);
+
 /* Local functions */
 
 static void set_event(EVENTS_ENUM_TYPE event, uint8_t data, bool latched) {
@@ -486,9 +402,6 @@ static void set_event(EVENTS_ENUM_TYPE event, uint8_t data, bool latched) {
       (events.entries[event].state != EVENT_STATE_ACTIVE_LATCHED)) {
     events.entries[event].occurences++;
     events.entries[event].MQTTpublished = false;
-    if (events.entries[event].log) {
-      log_event(event, events.entries[event].millisrolloverCount, events.entries[event].timestamp, data);
-    }
 #ifdef DEBUG_LOG
     logging.print("Event: ");
     logging.println(get_event_message_string(event));
@@ -496,8 +409,7 @@ static void set_event(EVENTS_ENUM_TYPE event, uint8_t data, bool latched) {
   }
 
   // We should set the event, update event info
-  events.entries[event].timestamp = millis();
-  events.entries[event].millisrolloverCount = millisrolloverCount;
+  events.entries[event].timestamp = get_timestamp(millis());
   events.entries[event].data = data;
   // Check if the event is latching
   events.entries[event].state = latched ? EVENT_STATE_ACTIVE_LATCHED : EVENT_STATE_ACTIVE;
@@ -528,17 +440,11 @@ static void update_bms_status(void) {
 
 // Function to compare events by timestamp descending
 bool compareEventsByTimestampDesc(const EventData& a, const EventData& b) {
-  if (a.event_pointer->millisrolloverCount != b.event_pointer->millisrolloverCount) {
-    return a.event_pointer->millisrolloverCount > b.event_pointer->millisrolloverCount;
-  }
   return a.event_pointer->timestamp > b.event_pointer->timestamp;
 }
 
 // Function to compare events by timestamp ascending
 bool compareEventsByTimestampAsc(const EventData& a, const EventData& b) {
-  if (a.event_pointer->millisrolloverCount != b.event_pointer->millisrolloverCount) {
-    return a.event_pointer->millisrolloverCount < b.event_pointer->millisrolloverCount;
-  }
   return a.event_pointer->timestamp < b.event_pointer->timestamp;
 }
 
@@ -550,68 +456,4 @@ static void update_event_level(void) {
     }
   }
   events.level = temporary_level;
-}
-
-static void log_event(EVENTS_ENUM_TYPE event, uint8_t millisrolloverCount, uint32_t timestamp, uint8_t data) {
-  // Update head with wrap to 0
-  if (++events.event_log_head_index == EE_NOF_EVENT_ENTRIES) {
-    events.event_log_head_index = 0;
-  }
-
-  // If the head now points to the tail, move the tail, with wrap to 0
-  if (events.event_log_head_index == events.event_log_tail_index) {
-    if (++events.event_log_tail_index == EE_NOF_EVENT_ENTRIES) {
-      events.event_log_tail_index = 0;
-    }
-  }
-
-  // The head now holds the index to the oldest event, the one we want to overwrite,
-  // so calculate the absolute address
-  int entry_address = EE_EVENT_ENTRY_START_ADDRESS + EE_EVENT_ENTRY_SIZE * events.event_log_head_index;
-
-  // Prepare an event block to write
-  EVENT_LOG_ENTRY_TYPE entry = {
-      .event = event, .millisrolloverCount = millisrolloverCount, .timestamp = timestamp, .data = data};
-
-  // Put the event in (what I guess is) the RAM EEPROM mirror, or write buffer
-  EEPROM.put(entry_address, entry);
-
-  // Store the new indices
-  EEPROM.writeUShort(EE_EVENT_LOG_HEAD_INDEX_ADDRESS, events.event_log_head_index);
-  EEPROM.writeUShort(EE_EVENT_LOG_TAIL_INDEX_ADDRESS, events.event_log_tail_index);
-  //logging.println("Wrote event " + String(event) + " to " + String(entry_address));
-  //logging.println("head: " + String(events.event_log_head_index) + ", tail: " + String(events.event_log_tail_index));
-
-  // We don't need the exact number, it's just for deciding to store or not
-  events.nof_logged_events += (events.nof_logged_events < 255) ? 1 : 0;
-}
-
-static void print_event_log(void) {
-  // If the head actually points to the tail, the log is probably blank
-  if (events.event_log_head_index == events.event_log_tail_index) {
-#ifdef DEBUG_LOG
-    logging.println("No events in log");
-#endif
-    return;
-  }
-  EVENT_LOG_ENTRY_TYPE entry;
-
-  for (int i = 0; i < EE_NOF_EVENT_ENTRIES; i++) {
-    // Start at the oldest event, work through the log all the way the the head
-    int index = ((events.event_log_tail_index + i) % EE_NOF_EVENT_ENTRIES);
-    int address = EE_EVENT_ENTRY_START_ADDRESS + EE_EVENT_ENTRY_SIZE * index;
-
-    EEPROM.get(address, entry);
-    if (entry.event == EVENT_NOF_EVENTS) {
-      // The entry is a blank that has been left behind somehow
-      continue;
-    }
-#ifdef DEBUG_LOG
-    logging.println("Event: " + String(get_event_enum_string(entry.event)) + ", data: " + String(entry.data) +
-                    ", time: " + String(entry.timestamp));
-#endif
-    if (index == events.event_log_head_index) {
-      break;
-    }
-  }
 }

@@ -1,13 +1,35 @@
 #include "comm_can.h"
+#include <map>
 #include "../../include.h"
 #include "src/devboard/sdcard/sdcard.h"
+#include "src/devboard/utils/logging.h"
+
+struct CanReceiverRegistration {
+  CanReceiver* receiver;
+  bool halfSpeed;
+};
+
+static std::multimap<CAN_Interface, CanReceiverRegistration> can_receivers;
+
+bool hasHalfSpeedReceivers(const CAN_Interface& iface) {
+  auto range = can_receivers.equal_range(iface);
+  for (auto it = range.first; it != range.second; ++it) {
+    if (it->second.halfSpeed) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // Parameters
-
-CAN_device_t CAN_cfg;          // CAN Config
-const int rx_queue_size = 10;  // Receive Queue size
+CAN_device_t CAN_cfg;              // CAN Config
+const uint8_t rx_queue_size = 10;  // Receive Queue size
+volatile bool send_ok_native = 0;
 volatile bool send_ok_2515 = 0;
 volatile bool send_ok_2518 = 0;
+static unsigned long previousMillis10 = 0;
+
+void map_can_frame_to_variable(CAN_frame* rx_frame, CAN_Interface interface);
 
 #ifdef CAN_ADDON
 static const uint32_t QUARTZ_FREQUENCY = CRYSTAL_FREQUENCY_MHZ * 1000000UL;  //MHZ configured in USER_SETTINGS.h
@@ -23,20 +45,24 @@ ACAN2517FD canfd(MCP2517_CS, SPI2517, MCP2517_INT);
 // Initialization functions
 
 void init_CAN() {
+  DEBUG_PRINTF("init_CAN called\n");
 // CAN pins
 #ifdef CAN_SE_PIN
   pinMode(CAN_SE_PIN, OUTPUT);
   digitalWrite(CAN_SE_PIN, LOW);
 #endif  // CAN_SE_PIN
-  CAN_cfg.speed = CAN_SPEED_500KBPS;
-#ifdef NATIVECAN_250KBPS  // Some component is requesting lower CAN speed
-  CAN_cfg.speed = CAN_SPEED_250KBPS;
-#endif  // NATIVECAN_250KBPS
+
+  // Half-speed currently only supported for CAN_NATIVE
+  auto anyHalfSpeedNative = hasHalfSpeedReceivers(CAN_Interface::CAN_NATIVE);
+
+  CAN_cfg.speed = anyHalfSpeedNative ? CAN_SPEED_250KBPS : CAN_SPEED_500KBPS;
   CAN_cfg.tx_pin_id = CAN_TX_PIN;
   CAN_cfg.rx_pin_id = CAN_RX_PIN;
   CAN_cfg.rx_queue = xQueueCreate(rx_queue_size, sizeof(CAN_frame_t));
   // Init CAN Module
   ESP32Can.CANInit();
+
+  DEBUG_PRINTF("init_CAN performed\n");
 
 #ifdef CAN_ADDON
 #ifdef DEBUG_LOG
@@ -103,27 +129,6 @@ void init_CAN() {
 #endif  // CANFD_ADDON
 }
 
-// Transmit functions
-void transmit_can() {
-  if (!allowed_to_send_CAN) {
-    return;  //Global block of CAN messages
-  }
-
-  transmit_can_battery();
-
-#ifdef CAN_INVERTER_SELECTED
-  transmit_can_inverter();
-#endif  // CAN_INVERTER_SELECTED
-
-#ifdef CHARGER_SELECTED
-  transmit_can_charger();
-#endif  // CHARGER_SELECTED
-
-#ifdef CAN_SHUNT_SELECTED
-  transmit_can_shunt();
-#endif  // CAN_SHUNT_SELECTED
-}
-
 void transmit_can_frame(CAN_frame* tx_frame, int interface) {
   if (!allowed_to_send_CAN) {
     return;
@@ -136,6 +141,7 @@ void transmit_can_frame(CAN_frame* tx_frame, int interface) {
 
   switch (interface) {
     case CAN_NATIVE:
+
       CAN_frame_t frame;
       frame.MsgID = tx_frame->ID;
       frame.FIR.B.FF = tx_frame->ext_ID ? CAN_frame_ext : CAN_frame_std;
@@ -144,7 +150,10 @@ void transmit_can_frame(CAN_frame* tx_frame, int interface) {
       for (uint8_t i = 0; i < tx_frame->DLC; i++) {
         frame.data.u8[i] = tx_frame->data.u8[i];
       }
-      ESP32Can.CANWriteFrame(&frame);
+      send_ok_native = ESP32Can.CANWriteFrame(&frame);
+      if (!send_ok_native) {
+        datalayer.system.info.can_native_send_fail = true;
+      }
       break;
     case CAN_ADDON_MCP2515: {
 #ifdef CAN_ADDON
@@ -160,9 +169,7 @@ void transmit_can_frame(CAN_frame* tx_frame, int interface) {
 
       send_ok_2515 = can.tryToSend(MCP2515Frame);
       if (!send_ok_2515) {
-        set_event(EVENT_CAN_BUFFER_FULL, interface);
-      } else {
-        clear_event(EVENT_CAN_BUFFER_FULL);
+        datalayer.system.info.can_2515_send_fail = true;
       }
 #else   // Interface not compiled, and settings try to use it
       set_event(EVENT_INTERFACE_MISSING, interface);
@@ -185,9 +192,7 @@ void transmit_can_frame(CAN_frame* tx_frame, int interface) {
       }
       send_ok_2518 = canfd.tryToSend(MCP2518Frame);
       if (!send_ok_2518) {
-        set_event(EVENT_CANFD_BUFFER_FULL, interface);
-      } else {
-        clear_event(EVENT_CANFD_BUFFER_FULL);
+        datalayer.system.info.can_2518_send_fail = true;
       }
 #else   // Interface not compiled, and settings try to use it
       set_event(EVENT_INTERFACE_MISSING, interface);
@@ -294,40 +299,35 @@ void print_can_frame(CAN_frame frame, frameDirection msgDir) {
   }
 }
 
-void map_can_frame_to_variable(CAN_frame* rx_frame, int interface) {
-  print_can_frame(*rx_frame, frameDirection(MSG_RX));
+void register_can_receiver(CanReceiver* receiver, CAN_Interface interface, bool halfSpeed) {
+  can_receivers.insert({interface, {receiver, halfSpeed}});
+  DEBUG_PRINTF("CAN receiver registered, total: %d\n", can_receivers.size());
+}
+
+void map_can_frame_to_variable(CAN_frame* rx_frame, CAN_Interface interface) {
+  if (interface !=
+      CANFD_NATIVE) {  //Avoid printing twice due to receive_frame_canfd_addon sending to both FD interfaces
+    //TODO: This check can be removed later when refactored to use inline functions for logging
+    print_can_frame(*rx_frame, frameDirection(MSG_RX));
+  }
 
 #ifdef LOG_CAN_TO_SD
-  add_can_frame_to_buffer(*rx_frame, frameDirection(MSG_RX));
+  if (interface !=
+      CANFD_NATIVE) {  //Avoid printing twice due to receive_frame_canfd_addon sending to both FD interfaces
+    //TODO: This check can be removed later when refactored to use inline functions for logging
+    add_can_frame_to_buffer(*rx_frame, frameDirection(MSG_RX));
+  }
 #endif
 
-  if (interface == can_config.battery) {
-    handle_incoming_can_frame_battery(*rx_frame);
-#ifdef CHADEMO_BATTERY
-    ISA_handleFrame(rx_frame);
-#endif
-  }
-  if (interface == can_config.inverter) {
-#ifdef CAN_INVERTER_SELECTED
-    map_can_frame_to_variable_inverter(*rx_frame);
-#endif
-  }
-  if (interface == can_config.battery_double) {
-#ifdef DOUBLE_BATTERY
-    handle_incoming_can_frame_battery2(*rx_frame);
-#endif
-  }
-  if (interface == can_config.charger) {
-#ifdef CHARGER_SELECTED
-    map_can_frame_to_variable_charger(*rx_frame);
-#endif
-  }
-  if (interface == can_config.shunt) {
-#ifdef CAN_SHUNT_SELECTED
-    handle_incoming_can_frame_shunt(*rx_frame);
-#endif
+  // Send the frame to all the receivers registered for this interface.
+  auto receivers = can_receivers.equal_range(interface);
+
+  for (auto it = receivers.first; it != receivers.second; ++it) {
+    auto& receiver = it->second;
+    receiver.receiver->receive_can_frame(rx_frame);
   }
 }
+
 void dump_can_frame(CAN_frame& frame, frameDirection msgDir) {
   char* message_string = datalayer.system.info.logged_can_messages;
   int offset = datalayer.system.info.logged_can_messages_offset;  // Keeps track of the current position in the buffer

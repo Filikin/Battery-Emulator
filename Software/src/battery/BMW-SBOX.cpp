@@ -1,40 +1,7 @@
-#include "../include.h"
-#ifdef BMW_SBOX
-#include "../datalayer/datalayer.h"
 #include "BMW-SBOX.h"
-
-#define MAX_ALLOWED_FAULT_TICKS 1000
-
-enum SboxState { DISCONNECTED, PRECHARGE, NEGATIVE, POSITIVE, PRECHARGE_OFF, COMPLETED, SHUTDOWN_REQUESTED };
-SboxState contactorStatus = DISCONNECTED;
-
-unsigned long prechargeStartTime = 0;
-unsigned long negativeStartTime = 0;
-unsigned long positiveStartTime = 0;
-unsigned long timeSpentInFaultedMode = 0;
-unsigned long LastMsgTime = 0;  // will store last time a 20ms CAN Message was send
-unsigned long LastAvgTime = 0;  // Last current storage time
-unsigned long ShuntLastSeen = 0;
-
-uint32_t avg_mA_array[10];
-uint32_t avg_sum;
-
-uint8_t k;  //avg array pointer
-
-uint8_t CAN100_cnt = 0;
-
-CAN_frame SBOX_100 = {.FD = false,
-                      .ext_ID = false,
-                      .DLC = 4,
-                      .ID = 0x100,
-                      .data = {0x55, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x00,
-                               0x00}};  // Byte 0: relay control, Byte 1: counter 0-E, Byte 4: CRC
-
-CAN_frame SBOX_300 = {.FD = false,
-                      .ext_ID = false,
-                      .DLC = 4,
-                      .ID = 0x300,
-                      .data = {0xFF, 0xFE, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00}};  // Static frame
+#include "../communication/can/comm_can.h"
+#include "../datalayer/datalayer.h"
+#include "../include.h"
 
 uint8_t reverse_bits(uint8_t byte) {
   uint8_t reversed = 0;
@@ -64,7 +31,7 @@ uint8_t calculateCRC(CAN_frame CAN) {
   return crc;
 }
 
-void handle_incoming_can_frame_shunt(CAN_frame rx_frame) {
+void BmwSbox::handle_incoming_can_frame(CAN_frame rx_frame) {
   unsigned long currentTime = millis();
   if (rx_frame.ID == 0x200) {
     ShuntLastSeen = currentTime;
@@ -100,18 +67,17 @@ void handle_incoming_can_frame_shunt(CAN_frame rx_frame) {
   }
 }
 
-void transmit_can_shunt() {
-  unsigned long currentTime = millis();
+void BmwSbox::transmit_can(unsigned long currentMillis) {
 
   /** Shunt can frames seen? **/
-  if (ShuntLastSeen + 1000 < currentTime) {
+  if (ShuntLastSeen + 1000 < currentMillis) {
     datalayer.shunt.available = false;
   } else {
     datalayer.shunt.available = true;
   }
   // Send 20ms CAN Message
-  if (currentTime - LastMsgTime >= INTERVAL_20_MS) {
-    LastMsgTime = currentTime;
+  if (currentMillis - LastMsgTime >= INTERVAL_20_MS) {
+    LastMsgTime = currentMillis;
     // First check if we have any active errors, incase we do, turn off the battery
     if (datalayer.battery.status.bms_status == FAULT) {
       timeSpentInFaultedMode++;
@@ -154,16 +120,16 @@ void transmit_can_shunt() {
     switch (contactorStatus) {
       case PRECHARGE:
         SBOX_100.data.u8[0] = 0x86;  // Precharge relay only
-        prechargeStartTime = currentTime;
+        prechargeStartTime = currentMillis;
         contactorStatus = NEGATIVE;
 #ifdef DEBUG_VIA_USB
         Serial.println("S-BOX Precharge relay engaged");
 #endif
         break;
       case NEGATIVE:
-        if (currentTime - prechargeStartTime >= CONTACTOR_CONTROL_T1) {
+        if (currentMillis - prechargeStartTime >= CONTACTOR_CONTROL_T1) {
           SBOX_100.data.u8[0] = 0xA6;  // Precharge + Negative
-          negativeStartTime = currentTime;
+          negativeStartTime = currentMillis;
           contactorStatus = POSITIVE;
           datalayer.shunt.precharging = true;
 #ifdef DEBUG_VIA_USB
@@ -172,11 +138,11 @@ void transmit_can_shunt() {
         }
         break;
       case POSITIVE:
-        if (currentTime - negativeStartTime >= CONTACTOR_CONTROL_T2 &&
+        if (currentMillis - negativeStartTime >= CONTACTOR_CONTROL_T2 &&
             (datalayer.shunt.measured_voltage_mV * MAX_PRECHARGE_RESISTOR_VOLTAGE_PERCENT <
              datalayer.shunt.measured_outvoltage_mV)) {
           SBOX_100.data.u8[0] = 0xAA;  // Precharge + Negative + Positive
-          positiveStartTime = currentTime;
+          positiveStartTime = currentMillis;
           contactorStatus = PRECHARGE_OFF;
           datalayer.shunt.precharging = false;
 #ifdef DEBUG_VIA_USB
@@ -185,7 +151,7 @@ void transmit_can_shunt() {
         }
         break;
       case PRECHARGE_OFF:
-        if (currentTime - positiveStartTime >= CONTACTOR_CONTROL_T3) {
+        if (currentMillis - positiveStartTime >= CONTACTOR_CONTROL_T3) {
           SBOX_100.data.u8[0] = 0x6A;  // Negative + Positive
           contactorStatus = COMPLETED;
 #ifdef DEBUG_VIA_USB
@@ -211,8 +177,7 @@ void transmit_can_shunt() {
   }
 }
 
-void setup_can_shunt() {
-  strncpy(datalayer.system.info.shunt_protocol, "BMW SBOX", 63);
+void BmwSbox::setup() {
+  strncpy(datalayer.system.info.shunt_protocol, Name, 63);
   datalayer.system.info.shunt_protocol[63] = '\0';
 }
-#endif

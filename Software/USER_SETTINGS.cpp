@@ -23,7 +23,7 @@ volatile CAN_Configuration can_config = {
 
 std::string ssid = WIFI_SSID;             // Set in USER_SECRETS.h
 std::string password = WIFI_PASSWORD;     // Set in USER_SECRETS.h
-const char* ssidAP = "Hannah QM Battery Emulator";  // Maximum of 63 characters, also used for device name on web interface
+const char* ssidAP = "BJ Test Battery Emulator";  // Maximum of 63 characters, also used for device name on web interface
 const char* passwordAP = AP_PASSWORD;     // Set in USER_SECRETS.h
 const uint8_t wifi_channel = 0;           // Set to 0 for automatic channel selection
 
@@ -66,3 +66,11 @@ volatile float CHARGER_MIN_HV = 200;      // Min permissible output (VDC) of cha
 volatile float CHARGER_MAX_POWER = 3300;  // Max power capable of charger, as a ceiling for validating config
 volatile float CHARGER_MAX_A = 11.5;      // Max current output (amps) of charger
 volatile float CHARGER_END_A = 1.0;       // Current at which charging is considered complete
+
+#ifdef PERIODIC_BMS_RESET_AT
+// A list of rules for your zone can be obtained from https://github.com/esp8266/Arduino/blob/master/cores/esp8266/TZ.h
+const char* time_zone =
+    "GMT0BST,M3.5.0/1,M10.5.0";  // TimeZone rule for Europe/London including daylight adjustment rules (optional)
+const char* ntpServer1 = "pool.ntp.org";
+const char* ntpServer2 = "time.nist.gov";
+#endif

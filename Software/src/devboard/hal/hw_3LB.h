@@ -52,14 +52,14 @@
 #define NEGATIVE_CONTACTOR_PIN 33
 #define PRECHARGE_PIN 25
 #define BMS_POWER 2
-
-#define SECOND_POSITIVE_CONTACTOR_PIN 13
-#define SECOND_NEGATIVE_CONTACTOR_PIN 16
-#define SECOND_PRECHARGE_PIN 18
-#define BMS_2_POWER 12
+#define SECOND_BATTERY_CONTACTORS_PIN 13
 
 // SMA CAN contactor pins
 #define INVERTER_CONTACTOR_ENABLE_PIN 36
+
+// Automatic precharging
+#define HIA4V1_PIN 25
+#define INVERTER_DISCONNECT_CONTACTOR_PIN 32
 
 // SD card
 //#define SD_MISO_PIN 2
@@ -75,12 +75,8 @@
 #define EQUIPMENT_STOP_PIN 35
 
 // BMW_I3_BATTERY wake up pin
-#ifdef BMW_I3_BATTERY
 #define WUP_PIN1 GPIO_NUM_25  // Wake up pin for battery 1
-#ifdef DOUBLE_BATTERY
 #define WUP_PIN2 GPIO_NUM_32  // Wake up pin for battery 2
-#endif                        // DOUBLE_BATTERY
-#endif                        // BMW_I3_BATTERY
 
 /* ----- Error checks below, don't change (can't be moved to separate file) ----- */
 #ifndef HW_CONFIGURED
