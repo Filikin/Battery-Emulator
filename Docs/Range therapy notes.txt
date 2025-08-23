@@ -1,0 +1,21 @@
+Notes from forking
+following https://nimmneun.com/webdev/how-to-update-a-git-fork-from-master
+
+User_settings.h
+Reenable after merging
+#define BYD_MODBUS  //Enable this line to emulate a "BYD 11kWh HVM battery" over Modbus RTU -- EK use for Fronius inverters
+
+
+static const char* hostname = WiFi.getHostname();
+  static String state_topic = String("rangetherapy/sensor/battery-emulator_") + String(hostname) + "/spec_data";
+
+Looks like 
+ static String state_topic = topic_name + "/events";
+#ifdef HA_AUTODISCOVERY
+=======
+  static const char* hostname = WiFi.getHostname();
+  static String state_topic = String("rangetherapy/sensor/battery-emulator_") + String(hostname) + "/info";
+
+
+replacing homeassistant with rangetherapy
+
