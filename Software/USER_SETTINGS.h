@@ -151,9 +151,9 @@
 // Increases battery life. If true will rescale SOC between the configured min/max-percentage
 #define BATTERY_USE_SCALED_SOC true
 // 8000 = 80.0% , Max percentage the battery will charge to (Inverter gets 100% when reached)
-#define BATTERY_MAXPERCENTAGE 9500
+#define BATTERY_MAXPERCENTAGE 9000
 // 2000 = 20.0% , Min percentage the battery will discharge to (Inverter gets 0% when reached)
-#define BATTERY_MINPERCENTAGE 00
+#define BATTERY_MINPERCENTAGE 05
 // 500 = 50.0 °C , Max temperature (Will produce a battery overheat event if above)
 #define BATTERY_MAXTEMPERATURE 400
 // -250 = -25.0 °C , Min temperature (Will produce a battery frozen event if below)
@@ -161,9 +161,9 @@
 // 150 = 15.0 °C , Max difference between min and max temperature (Will produce a battery temperature deviation event if greater)
 #define BATTERY_MAX_TEMPERATURE_DEVIATION 150
 // 300 = 30.0A , Max charge in Amp (Some inverters needs to be limited)
-#define BATTERY_MAX_CHARGE_AMP 300
+#define BATTERY_MAX_CHARGE_AMP 25
 // 300 = 30.0A , Max discharge in Amp (Some inverters needs to be limited)
-#define BATTERY_MAX_DISCHARGE_AMP 300
+#define BATTERY_MAX_DISCHARGE_AMP 25
 // Enable this to manually set voltage limits on how much battery can be discharged/charged. Normally not used.
 #define BATTERY_USE_VOLTAGE_LIMITS false
 // 5000 = 500.0V , Target charge voltage (Value can be tuned on the fly via webserver). Not used unless BATTERY_USE_VOLTAGE_LIMITS = true
