@@ -153,7 +153,7 @@
 // 8000 = 80.0% , Max percentage the battery will charge to (Inverter gets 100% when reached)
 #define BATTERY_MAXPERCENTAGE 9000
 // 2000 = 20.0% , Min percentage the battery will discharge to (Inverter gets 0% when reached)
-#define BATTERY_MINPERCENTAGE 05
+#define BATTERY_MINPERCENTAGE 0500
 // 500 = 50.0 °C , Max temperature (Will produce a battery overheat event if above)
 #define BATTERY_MAXTEMPERATURE 400
 // -250 = -25.0 °C , Min temperature (Will produce a battery frozen event if below)
