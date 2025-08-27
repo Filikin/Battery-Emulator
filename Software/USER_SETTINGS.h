@@ -161,9 +161,9 @@
 // 150 = 15.0 °C , Max difference between min and max temperature (Will produce a battery temperature deviation event if greater)
 #define BATTERY_MAX_TEMPERATURE_DEVIATION 150
 // 300 = 30.0A , Max charge in Amp (Some inverters needs to be limited)
-#define BATTERY_MAX_CHARGE_AMP 25
+#define BATTERY_MAX_CHARGE_AMP 250
 // 300 = 30.0A , Max discharge in Amp (Some inverters needs to be limited)
-#define BATTERY_MAX_DISCHARGE_AMP 25
+#define BATTERY_MAX_DISCHARGE_AMP 250
 // Enable this to manually set voltage limits on how much battery can be discharged/charged. Normally not used.
 #define BATTERY_USE_VOLTAGE_LIMITS false
 // 5000 = 500.0V , Target charge voltage (Value can be tuned on the fly via webserver). Not used unless BATTERY_USE_VOLTAGE_LIMITS = true
