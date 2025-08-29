@@ -21,7 +21,7 @@ class RjxzsBms : public CanBattery {
 
  private:
   /* Tweak these according to your battery build */
-  static const int MAX_PACK_VOLTAGE_DV = 4100;  //5000 = 500.0V
+  static const int MAX_PACK_VOLTAGE_DV = 4150;  //5000 = 500.0V
   static const int MIN_PACK_VOLTAGE_DV = 2950;
   static const int MAX_CELL_VOLTAGE_MV = 4090;  //Battery is put into emergency stop if one cell goes over this value
   static const int MIN_CELL_VOLTAGE_MV = 3250;  //Battery is put into emergency stop if one cell goes below this value
